@@ -8883,93 +8883,13 @@ function ReportsView({
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 5000);
   };
-  // Dev/demo helper — drops a handful of realistic jobs onto reportDate so
-  // "Send Daily Report" has something to work with straight away. Purely
-  // additive (appends to existing jobs) and only touches the Calculator's
-  // jobs list, same shape saveJob() writes.
-  const loadSampleJobsForDate = () => {
-    if (!setJobs) return;
-    const sample = [{
-      reference: 'HX-3301',
-      customer: 'Argos Distribution',
-      pickupLocation: 'Milton Keynes MK1 1AA',
-      deliveryLocation: 'Manchester M17 1AB',
-      positioningMiles: 8,
-      loadedMiles: 160,
-      returnMiles: 150,
-      customerRate: 620,
-      driverHours: 8.5
-    }, {
-      reference: 'HX-3302',
-      customer: 'Wickes Building Supplies',
-      pickupLocation: 'Northampton NN1 1AA',
-      deliveryLocation: 'Bristol BS1 1AA',
-      positioningMiles: 5,
-      loadedMiles: 120,
-      returnMiles: 118,
-      customerRate: 470,
-      driverHours: 7
-    }, {
-      reference: 'HX-3303',
-      customer: 'Screwfix Direct',
-      pickupLocation: 'Luton LU1 1AA',
-      deliveryLocation: 'Birmingham B1 1AA',
-      positioningMiles: 4,
-      loadedMiles: 65,
-      returnMiles: 63,
-      customerRate: 310,
-      driverHours: 4.5
-    }, {
-      reference: 'HX-3304',
-      customer: 'Argos Distribution',
-      pickupLocation: 'Milton Keynes MK1 1AA',
-      deliveryLocation: 'Leeds LS1 1AA',
-      positioningMiles: 6,
-      loadedMiles: 180,
-      returnMiles: 175,
-      customerRate: 690,
-      driverHours: 9
-    }, {
-      reference: 'HX-3305',
-      customer: 'Wickes Building Supplies',
-      pickupLocation: 'Coventry CV1 1AA',
-      deliveryLocation: 'Sheffield S1 1AA',
-      positioningMiles: 3,
-      loadedMiles: 95,
-      returnMiles: 90,
-      customerRate: 0,
-      // deliberately unprofitable — shows the red profit styling in the PDF
-      driverHours: 6
-    }];
-    const newJobs = sample.map(s => ({
-      ...blankJob(),
-      ...s,
-      id: newId('job'),
-      date: reportDate,
-      status: 'delivered',
-      returnToYard: true
-    }));
-    setJobs([...jobs, ...newJobs]);
-    dailyPdfRef.current = null;
-    setDailyReport({
-      status: 'idle',
-      stage: '',
-      error: ''
-    });
-    setToast(`Added ${newJobs.length} sample jobs for ${reportDate}`);
-  };
   if (jobs.length === 0) {
     return /*#__PURE__*/React.createElement("div", {
       className: "text-center py-20 text-stone-500"
     }, /*#__PURE__*/React.createElement(FileText, {
       size: 32,
       className: "mx-auto mb-3 text-stone-300"
-    }), /*#__PURE__*/React.createElement("p", null, "No jobs yet — reports will appear here as you log jobs."), setJobs && /*#__PURE__*/React.createElement("button", {
-      onClick: loadSampleJobsForDate,
-      className: "mt-4 bg-white hover:bg-stone-100 border border-stone-300 text-stone-700 px-3 py-1.5 rounded text-sm inline-flex items-center gap-1.5"
-    }, /*#__PURE__*/React.createElement(Plus, {
-      size: 14
-    }), ` Load sample jobs for ${reportDate}`));
+    }), /*#__PURE__*/React.createElement("p", null, "No jobs yet — reports will appear here as you log jobs."));
   }
   return /*#__PURE__*/React.createElement("div", {
     className: "space-y-6"
@@ -8988,13 +8908,7 @@ function ReportsView({
   }), reportDate !== todayStrLocal() && /*#__PURE__*/React.createElement("button", {
     onClick: () => onReportDateChange(todayStrLocal()),
     className: "text-xs text-amber-700 hover:text-amber-800"
-  }, "Reset to today")), setJobs && /*#__PURE__*/React.createElement("button", {
-    onClick: loadSampleJobsForDate,
-    title: "Add a handful of realistic test jobs on the date above, so you can try Send Daily Report",
-    className: "bg-white hover:bg-stone-100 border border-stone-300 text-stone-700 px-3 py-1.5 rounded text-sm flex items-center gap-1.5"
-  }, /*#__PURE__*/React.createElement(Plus, {
-    size: 14
-  }), " Load sample jobs")), /*#__PURE__*/React.createElement("div", {
+  }, "Reset to today"))), /*#__PURE__*/React.createElement("div", {
     className: "flex items-center justify-between flex-wrap gap-3 print:hidden"
   }, /*#__PURE__*/React.createElement(DateRangePicker, {
     presets: reportPresets,

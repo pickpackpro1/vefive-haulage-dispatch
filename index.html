@@ -226,17 +226,42 @@ window.addEventListener('unhandledrejection', function (e) {
     });
   });
 
+  // Right after Google redirects back, the URL hash still carries the OAuth
+  // token and Supabase needs a moment to read it into a session — checking
+  // getSession() before that finishes used to show the sign-in screen again
+  // (a false "not signed in"), which looked like an infinite login loop.
+  // While that hash is present we wait for onAuthStateChange instead of
+  // trusting an immediate getSession() miss.
+  function isOAuthRedirect() {
+    return /access_token=|refresh_token=|error=/.test(window.location.hash);
+  }
+
   sb.auth.getSession().then(function (res) {
     if (res.data.session) {
       onAuthed(res.data.session.user);
-    } else {
+    } else if (!isOAuthRedirect()) {
       showAuthGate();
     }
   });
 
   sb.auth.onAuthStateChange(function (_event, session) {
-    if (session) onAuthed(session.user);
+    if (session) {
+      onAuthed(session.user);
+      if (window.location.hash) {
+        history.replaceState(null, '', window.location.pathname + window.location.search);
+      }
+    } else if (!isOAuthRedirect()) {
+      showAuthGate();
+    }
   });
+
+  // Safety net: if we're mid-redirect but no session ever arrives (e.g. the
+  // OAuth exchange failed), don't leave the user stuck on a blank loading screen.
+  if (isOAuthRedirect()) {
+    setTimeout(function () {
+      if (!authed) showAuthGate();
+    }, 6000);
+  }
 })();
 </script>
 

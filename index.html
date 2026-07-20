@@ -5887,10 +5887,15 @@ function ScheduleView({
     }
   };
 
-  // Date navigation — week mode jumps in 7-day steps
+  // Date navigation — week mode jumps in 7-day steps, month mode in calendar months
   const shiftDate = days => {
     const d = new Date(dateStr + 'T00:00:00');
-    d.setDate(d.getDate() + (viewMode === 'week' ? days * 7 : days));
+    if (viewMode === 'month') {
+      d.setDate(1);
+      d.setMonth(d.getMonth() + days);
+    } else {
+      d.setDate(d.getDate() + (viewMode === 'week' ? days * 7 : days));
+    }
     setDateStr(d.toISOString().slice(0, 10));
   };
   const setToday = () => setDateStr(todayStrLocal());
@@ -5915,6 +5920,67 @@ function ScheduleView({
     if (!ws || !we) return '';
     return `${ws.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })} – ${we.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}`;
   })();
+  const isThisMonth = dateStr.slice(0, 7) === todayStr.slice(0, 7);
+  const monthLabel = (() => {
+    const d = new Date(dateStr + 'T00:00:00');
+    return d.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
+  })();
+  // 6 full weeks (Mon-Sun) covering the month, so the grid is a consistent
+  // rectangle including the trailing/leading days of adjacent months.
+  const monthGrid = useMemo(() => {
+    const firstOfMonth = new Date(dateStr.slice(0, 7) + '-01T00:00:00');
+    const firstWeekday = (firstOfMonth.getDay() + 6) % 7; // Mon=0
+    const gridStart = new Date(firstOfMonth);
+    gridStart.setDate(gridStart.getDate() - firstWeekday);
+    const weeks = [];
+    const cursor = new Date(gridStart);
+    for (let w = 0; w < 6; w++) {
+      const week = [];
+      for (let d = 0; d < 7; d++) {
+        week.push(cursor.toISOString().slice(0, 10));
+        cursor.setDate(cursor.getDate() + 1);
+      }
+      weeks.push(week);
+    }
+    return weeks;
+  }, [dateStr]);
+  const monthDayStats = useMemo(() => {
+    const map = new Map();
+    const gridStart = monthGrid[0][0];
+    const gridEnd = monthGrid[monthGrid.length - 1][6];
+    for (const j of jobs || []) {
+      if (!j.date || j.status === 'cancelled') continue;
+      if (j.date < gridStart || j.date > gridEnd) continue;
+      const cur = map.get(j.date) || { count: 0, revenue: 0 };
+      cur.count += 1;
+      cur.revenue += Number(j.customerRate || 0) + (j.backload ? Number(j.backload.customerRate || 0) : 0);
+      map.set(j.date, cur);
+    }
+    return map;
+  }, [jobs, monthGrid]);
+  const monthView = /*#__PURE__*/React.createElement(Card, null, /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-7 gap-1 text-center text-xs uppercase tracking-wider text-stone-500 font-medium mb-2"
+  }, ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(d => /*#__PURE__*/React.createElement("div", { key: d }, d))), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-7 gap-1"
+  }, monthGrid.flat().map(dStr => {
+    const inMonth = dStr.slice(0, 7) === dateStr.slice(0, 7);
+    const stat = monthDayStats.get(dStr);
+    const isTodayCell = dStr === todayStr;
+    return /*#__PURE__*/React.createElement("button", {
+      key: dStr,
+      onClick: () => {
+        setDateStr(dStr);
+        setViewMode('day');
+      },
+      className: `text-left rounded border px-2 py-2 min-h-[64px] transition-colors ${isTodayCell ? 'border-amber-500 bg-amber-50' : 'border-stone-200 hover:bg-stone-50'} ${inMonth ? '' : 'opacity-40'}`
+    }, /*#__PURE__*/React.createElement("div", {
+      className: `text-xs font-medium ${isTodayCell ? 'text-amber-700' : 'text-stone-600'}`
+    }, Number(dStr.slice(8, 10))), stat && /*#__PURE__*/React.createElement("div", {
+      className: "mt-1 text-[10px] text-stone-600 space-y-0.5"
+    }, /*#__PURE__*/React.createElement("div", null, stat.count, " job", stat.count === 1 ? '' : 's'), /*#__PURE__*/React.createElement("div", {
+      className: "text-emerald-700 font-medium"
+    }, fmtGBP(stat.revenue))));
+  })));
 
   // Jobs on this date (day view)
   const allJobsToday = (jobs || []).filter(j => j.date === dateStr && j.status !== 'cancelled');
@@ -6138,28 +6204,28 @@ function ScheduleView({
   }, /*#__PURE__*/React.createElement("button", {
     className: "px-3 py-1.5 rounded border border-stone-300 text-sm hover:bg-stone-100",
     onClick: () => shiftDate(-1)
-  }, viewMode === 'week' ? "← Last week" : "← Yesterday"), /*#__PURE__*/React.createElement("button", {
-    className: `px-3 py-1.5 rounded text-sm border ${viewMode === 'week' ? (isThisWeek ? 'bg-stone-900 text-white border-stone-900' : 'border-stone-300 hover:bg-stone-100') : (isToday ? 'bg-stone-900 text-white border-stone-900' : 'border-stone-300 hover:bg-stone-100')}`,
+  }, viewMode === 'month' ? "← Last month" : viewMode === 'week' ? "← Last week" : "← Yesterday"), /*#__PURE__*/React.createElement("button", {
+    className: `px-3 py-1.5 rounded text-sm border ${(viewMode === 'month' ? isThisMonth : viewMode === 'week' ? isThisWeek : isToday) ? 'bg-stone-900 text-white border-stone-900' : 'border-stone-300 hover:bg-stone-100'}`,
     onClick: setToday
-  }, viewMode === 'week' ? "This week" : "Today"), /*#__PURE__*/React.createElement("button", {
+  }, viewMode === 'month' ? "This month" : viewMode === 'week' ? "This week" : "Today"), /*#__PURE__*/React.createElement("button", {
     className: "px-3 py-1.5 rounded border border-stone-300 text-sm hover:bg-stone-100",
     onClick: () => shiftDate(1)
-  }, viewMode === 'week' ? "Next week →" : "Tomorrow →"), /*#__PURE__*/React.createElement("input", {
+  }, viewMode === 'month' ? "Next month →" : viewMode === 'week' ? "Next week →" : "Tomorrow →"), /*#__PURE__*/React.createElement("input", {
     type: "date",
     value: dateStr,
     onChange: e => setDateStr(e.target.value),
     className: "px-3 py-1.5 rounded border border-stone-300 text-sm focus:outline-none focus:ring-2 focus:ring-amber-600"
   }), /*#__PURE__*/React.createElement("div", {
     className: "inline-flex bg-stone-100 rounded p-0.5 text-sm ml-2"
-  }, ['day', 'week'].map(m => /*#__PURE__*/React.createElement("button", {
+  }, ['day', 'week', 'month'].map(m => /*#__PURE__*/React.createElement("button", {
     key: m,
     onClick: () => setViewMode(m),
     className: `px-3 py-1.5 rounded transition-colors ${viewMode === m ? 'bg-white text-stone-900 shadow-sm' : 'text-stone-500 hover:text-stone-800'}`
-  }, m === 'day' ? 'Day' : 'Week')))), /*#__PURE__*/React.createElement("div", {
+  }, m === 'day' ? 'Day' : m === 'week' ? 'Week' : 'Month')))), /*#__PURE__*/React.createElement("div", {
     className: "text-sm font-medium text-stone-700"
-  }, viewMode === 'week' ? weekLabel : dateLabel))), /*#__PURE__*/React.createElement(ScheduleLegend, {
+  }, viewMode === 'month' ? monthLabel : viewMode === 'week' ? weekLabel : dateLabel))), /*#__PURE__*/React.createElement(ScheduleLegend, {
     settings: settings
-  }), /*#__PURE__*/React.createElement(Card, null, /*#__PURE__*/React.createElement("div", {
+  }), viewMode !== 'month' && /*#__PURE__*/React.createElement(Card, null, /*#__PURE__*/React.createElement("div", {
     className: "text-xs uppercase tracking-wider text-stone-500 font-medium mb-3"
   }, viewMode === 'week' ? `Snapshot — ${dateLabel} (day totals)` : `Day at a glance — ${dateLabel}`), /*#__PURE__*/React.createElement("div", {
     className: "grid grid-cols-2 sm:grid-cols-4 gap-3"
@@ -6172,7 +6238,7 @@ function ScheduleView({
     summaryTile('Fleet shift', dayMetrics.shiftSum.toFixed(1) + 'h', `${dayMetrics.breaks} break${dayMetrics.breaks === 1 ? '' : 's'} inserted`, null, true),
     summaryTile('Planned miles', Math.round(dayMetrics.miles).toLocaleString('en-GB'), 'positioning + loaded + return', null, true),
     summaryTile('Warnings', warningsCount, warningsCount === 0 ? 'all clear' : 'check flagged rows', warningsCount > 0 ? statusBg[worstFleetStatus] : statusBg.green)
-  )), viewMode === 'day' ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(Card, null, /*#__PURE__*/React.createElement("div", {
+  )), viewMode === 'month' ? monthView : viewMode === 'day' ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(Card, null, /*#__PURE__*/React.createElement("div", {
     className: "overflow-x-auto"
   }, /*#__PURE__*/React.createElement("div", {
     style: {

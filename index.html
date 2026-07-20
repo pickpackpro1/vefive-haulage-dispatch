@@ -4600,6 +4600,7 @@ function HaulageDispatchDashboard() {
     addPaymentTerm: addPaymentTerm,
     setToast: setToast
   }), tab === 'payments' && /*#__PURE__*/React.createElement(PaymentsView, {
+    jobs: jobs,
     paymentTerms: paymentTerms,
     addPaymentTerm: addPaymentTerm,
     markPaymentPaid: markPaymentPaid,
@@ -11662,6 +11663,7 @@ function exportPaymentsXlsx(paymentTerms) {
   return filename;
 }
 function PaymentsView({
+  jobs,
   paymentTerms,
   addPaymentTerm,
   markPaymentPaid,
@@ -11671,17 +11673,86 @@ function PaymentsView({
 }) {
   const [showPaid, setShowPaid] = useState(false);
   const [adding, setAdding] = useState(false);
+  // Every non-cancelled job gets a row here, not just ones that already have
+  // a saved payment record — jobs without one get a "virtual" row built
+  // straight from the job, so a due date can be set on the spot. Editing a
+  // virtual row's terms/due date/paid state creates the real record via
+  // addPaymentTerm (matched back to this job by sourceJobId, same as the
+  // Calculator's auto-sync on save).
   const rows = useMemo(() => {
-    const withStatus = (paymentTerms || []).map(p => ({
+    const usedJobIds = new Set();
+    const fromJobs = (jobs || []).filter(j => j.status !== 'cancelled').map(j => {
+      const existing = (paymentTerms || []).find(p => p.sourceJobId === j.id);
+      if (existing) {
+        usedJobIds.add(j.id);
+        return {
+          p: existing,
+          status: paymentStatus(existing)
+        };
+      }
+      const virtual = {
+        id: `virtual-${j.id}`,
+        isVirtual: true,
+        sourceJobId: j.id,
+        reference: j.reference,
+        loadId: j.reference,
+        customerName: j.customer,
+        agreedRate: j.customerRate,
+        paymentTermsRaw: j.paymentTermsRaw || '',
+        deliveryDate: j.date,
+        dueDate: j.paymentTermsRaw ? computePaymentDueDateIso(j.date, j.paymentTermsRaw) : '',
+        paid: false
+      };
+      return {
+        p: virtual,
+        status: paymentStatus(virtual)
+      };
+    });
+    const orphanRecords = (paymentTerms || []).filter(p => !p.sourceJobId || !usedJobIds.has(p.sourceJobId)).map(p => ({
       p,
       status: paymentStatus(p)
     }));
+    const withStatus = [...fromJobs, ...orphanRecords];
     const visible = showPaid ? withStatus : withStatus.filter(r => !r.p.paid);
     return visible.sort((a, b) => {
       if (a.p.paid !== b.p.paid) return a.p.paid ? 1 : -1;
       return (a.p.dueDate || '9999-99-99').localeCompare(b.p.dueDate || '9999-99-99');
     });
-  }, [paymentTerms, showPaid]);
+  }, [jobs, paymentTerms, showPaid]);
+  // Persists a virtual (job-only) row for the first time on edit; updates the
+  // real record otherwise.
+  const ensureAndUpdate = (p, patch) => {
+    if (p.isVirtual) {
+      const {
+        id,
+        isVirtual,
+        ...rest
+      } = p;
+      addPaymentTerm({
+        ...rest,
+        ...patch
+      });
+    } else {
+      updatePaymentTerm(p.id, patch);
+    }
+  };
+  const ensureAndTogglePaid = p => {
+    if (p.isVirtual) {
+      const {
+        id,
+        isVirtual,
+        ...rest
+      } = p;
+      addPaymentTerm({
+        ...rest,
+        paid: !p.paid,
+        paidAt: !p.paid ? new Date().toISOString() : ''
+      });
+    } else {
+      markPaymentPaid(p.id, !p.paid);
+    }
+    setToast(p.paid ? 'Marked unpaid' : 'Marked paid');
+  };
   const unpaid = (paymentTerms || []).filter(p => !p.paid);
   const outstandingTotal = unpaid.reduce((s, p) => s + parseMoneyValue(p.agreedRate), 0);
   const overdueCount = unpaid.filter(p => paymentStatus(p).key === 'overdue' || paymentStatus(p).key === 'today').length;
@@ -11826,7 +11897,7 @@ function PaymentsView({
     className: "py-2 pr-3"
   }, /*#__PURE__*/React.createElement("select", {
     value: p.paymentTermsRaw || '',
-    onChange: e => updatePaymentTerm(p.id, {
+    onChange: e => ensureAndUpdate(p, {
       paymentTermsRaw: e.target.value,
       dueDate: computePaymentDueDateIso(p.deliveryDate, e.target.value)
     }),
@@ -11844,10 +11915,10 @@ function PaymentsView({
   }, /*#__PURE__*/React.createElement("input", {
     type: "date",
     value: p.dueDate || '',
-    onChange: e => updatePaymentTerm(p.id, {
+    onChange: e => ensureAndUpdate(p, {
       dueDate: e.target.value
     }),
-    className: "bg-white border border-stone-300 rounded px-2 py-1 text-xs",
+    className: `bg-white border rounded px-2 py-1 text-xs ${!p.dueDate ? 'border-amber-400' : 'border-stone-300'}`,
     style: {
       fontFamily: "'JetBrains Mono', monospace"
     }
@@ -11858,15 +11929,12 @@ function PaymentsView({
   }, status.text)), /*#__PURE__*/React.createElement("td", {
     className: "py-2 whitespace-nowrap"
   }, /*#__PURE__*/React.createElement("button", {
-    onClick: () => {
-      markPaymentPaid(p.id, !p.paid);
-      setToast(p.paid ? 'Marked unpaid' : 'Marked paid');
-    },
+    onClick: () => ensureAndTogglePaid(p),
     className: "text-stone-400 hover:text-emerald-700 p-1",
     title: p.paid ? 'Mark unpaid' : 'Mark paid'
   }, /*#__PURE__*/React.createElement(CheckCircle2, {
     size: 14
-  })), /*#__PURE__*/React.createElement("button", {
+  })), !p.isVirtual && /*#__PURE__*/React.createElement("button", {
     onClick: () => deletePaymentTerm(p.id),
     className: "text-stone-400 hover:text-red-700 p-1",
     title: "Delete"

@@ -72,16 +72,6 @@
 <body>
 <div id="loading"><div class="spin"></div><div>Loading dashboard…</div></div>
 <div id="fatal"></div>
-<div id="authgate" style="display:none; position:fixed; inset:0; z-index:9998; background:#fafaf9; align-items:center; justify-content:center; font-family:-apple-system,sans-serif;">
-  <form id="authform" style="width:100%; max-width:340px; padding:32px; background:#fff; border:1px solid #e7e5e4; border-radius:12px; box-shadow:0 10px 15px -3px rgba(0,0,0,.1);">
-    <h1 style="margin:0 0 4px; font-size:20px; font-weight:700; color:#292524;">Vefive Haulage Dispatch</h1>
-    <p style="margin:0 0 20px; font-size:13px; color:#78716c;">Enter the passcode to continue</p>
-    <input type="password" id="auth-password" placeholder="Passcode" autocomplete="current-password" required style="width:100%; box-sizing:border-box; padding:10px 12px; margin-bottom:14px; border:1px solid #d6d3d1; border-radius:8px; font-size:14px;">
-    <div id="auth-error" style="color:#b91c1c; font-size:13px; margin-bottom:10px; min-height:16px;"></div>
-    <button type="submit" id="auth-submit" style="width:100%; padding:10px; background:#b45309; color:#fff; border:none; border-radius:8px; font-size:14px; font-weight:600; cursor:pointer;">Unlock</button>
-  </form>
-</div>
-<button id="signout-btn" style="display:none; position:fixed; top:10px; right:10px; z-index:9997; padding:6px 12px; background:#fff; border:1px solid #d6d3d1; border-radius:8px; font-size:12px; cursor:pointer; box-shadow:0 1px 2px rgba(0,0,0,.05);">Sign out</button>
 <div id="root"></div>
 
 <script>
@@ -106,11 +96,8 @@ window.addEventListener('unhandledrejection', function (e) {
 (function () {
   var SUPABASE_URL = 'https://rkeqyydekyiahlnyovvs.supabase.co';
   var SUPABASE_ANON_KEY = 'sb_publishable_VwrybW--aZbDv1Ea7OoKLg_Mw5KwmvA';
-  var SHARED_ACCOUNT_EMAIL = 'zayantechtricks@gmail.com';
   var sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
   window.__sb = sb;
-
-  var currentUser = null;
 
   window.storage = {
     get: function (key) {
@@ -120,7 +107,7 @@ window.addEventListener('unhandledrejection', function (e) {
       });
     },
     set: function (key, value) {
-      return sb.from('app_data').upsert({ key: key, value: value, updated_at: new Date().toISOString(), updated_by: currentUser && currentUser.id }).then(function (res) {
+      return sb.from('app_data').upsert({ key: key, value: value, updated_at: new Date().toISOString() }).then(function (res) {
         if (res.error) throw res.error;
         return { key: key, value: value };
       });
@@ -141,63 +128,10 @@ window.addEventListener('unhandledrejection', function (e) {
     }
   };
 
-  var appReadyFn = null;
-  var authed = false;
-
-  window.__vefiveOnAppReady = function (fn) { appReadyFn = fn; maybeStart(); };
-
-  function maybeStart() {
-    if (authed && appReadyFn) {
-      document.getElementById('loading').classList.add('hidden');
-      document.getElementById('authgate').style.display = 'none';
-      document.getElementById('signout-btn').style.display = 'block';
-      appReadyFn();
-    }
-  }
-
-  function showAuthGate() {
+  window.__vefiveOnAppReady = function (fn) {
     document.getElementById('loading').classList.add('hidden');
-    document.getElementById('authgate').style.display = 'flex';
-  }
-
-  function onAuthed(user) {
-    currentUser = user;
-    authed = true;
-    maybeStart();
-  }
-
-  document.addEventListener('DOMContentLoaded', function () {
-    var form = document.getElementById('authform');
-    var errorEl = document.getElementById('auth-error');
-    var submitBtn = document.getElementById('auth-submit');
-
-    form.addEventListener('submit', function (e) {
-      e.preventDefault();
-      errorEl.textContent = '';
-      submitBtn.disabled = true;
-      var password = document.getElementById('auth-password').value;
-      sb.auth.signInWithPassword({ email: SHARED_ACCOUNT_EMAIL, password: password }).then(function (res) {
-        submitBtn.disabled = false;
-        if (res.error) { errorEl.textContent = 'Incorrect passcode.'; return; }
-        if (res.data.session) onAuthed(res.data.session.user);
-      }).catch(function (err) {
-        submitBtn.disabled = false;
-        errorEl.textContent = (err && err.message) || String(err);
-      });
-    });
-
-    document.getElementById('signout-btn').addEventListener('click', function () {
-      sb.auth.signOut().then(function () { location.reload(); });
-    });
-  });
-
-  sb.auth.getSession().then(function (res) {
-    if (res.data.session) {
-      onAuthed(res.data.session.user);
-    } else {
-      showAuthGate();
-    }
-  });
+    fn();
+  };
 })();
 </script>
 
@@ -1529,7 +1463,11 @@ function extractLabelValue(lines, label, stopLabels = []) {
     const line = lines[i];
     if (stopSet.has(line.toLowerCase())) break;
     if (line.includes(':')) break;
-    if (/^[A-Z][A-Z &/-]{2,}$/.test(line) && !isBlankValue(line)) break;
+    // Section headers in this doc are always short (max 3 words, e.g.
+    // "SUB-CONTRACTED BY", "NOTES & DETAILS"). Longer all-caps lines are
+    // values, not headers — e.g. a company name repeated as "X LTD T/A X
+    // LTD" is 4-5 words and must not be mistaken for the next section.
+    if (line.split(/\s+/).length <= 3 && /^[A-Z][A-Z &/-]{2,}$/.test(line) && !isBlankValue(line)) break;
     if (isBlankValue(line)) break;
     out.push(line);
   }
@@ -4159,6 +4097,10 @@ function HaulageDispatchDashboard() {
       setToast('Add a reference, customer, or rate before saving');
       return;
     }
+    if (!job.startTime) {
+      setToast('Add a start time before saving');
+      return;
+    }
     const {
       jobToSave,
       newCustomer
@@ -4947,7 +4889,7 @@ function Calculator({
   }, "Times"), /*#__PURE__*/React.createElement("div", {
     className: "grid sm:grid-cols-2 gap-4"
   }, /*#__PURE__*/React.createElement(Field, {
-    label: "Start time",
+    label: "Start time *",
     type: "time",
     value: job.startTime,
     onChange: v => setJob({
@@ -4955,7 +4897,7 @@ function Calculator({
       startTime: v,
       scheduledTime: v
     }),
-    hint: "Used as the job's scheduled time on the Schedule & Today tabs"
+    hint: "Required — used as the job's scheduled time on the Schedule & Today tabs"
   }), /*#__PURE__*/React.createElement(Field, {
     label: "Pickup time",
     type: "time",

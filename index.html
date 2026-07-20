@@ -83,6 +83,15 @@
     <div id="auth-error" style="color:#b91c1c; font-size:13px; margin-top:10px; min-height:16px;"></div>
   </div>
 </div>
+<div id="passgate" style="display:none; position:fixed; inset:0; z-index:9998; background:#fafaf9; align-items:center; justify-content:center; font-family:-apple-system,sans-serif;">
+  <form id="passform" style="width:100%; max-width:340px; padding:32px; background:#fff; border:1px solid #e7e5e4; border-radius:12px; box-shadow:0 10px 15px -3px rgba(0,0,0,.1);">
+    <h1 style="margin:0 0 4px; font-size:20px; font-weight:700; color:#292524;">Vefive Haulage Dispatch</h1>
+    <p style="margin:0 0 20px; font-size:13px; color:#78716c;">Enter the team passcode to continue</p>
+    <input type="password" id="pass-input" placeholder="Passcode" autocomplete="off" required style="width:100%; box-sizing:border-box; padding:10px 12px; margin-bottom:14px; border:1px solid #d6d3d1; border-radius:8px; font-size:14px;">
+    <div id="pass-error" style="color:#b91c1c; font-size:13px; margin-bottom:10px; min-height:16px;"></div>
+    <button type="submit" style="width:100%; padding:10px; background:#b45309; color:#fff; border:none; border-radius:8px; font-size:14px; font-weight:600; cursor:pointer;">Unlock</button>
+  </form>
+</div>
 <button id="signout-btn" style="display:none; position:fixed; top:10px; right:10px; z-index:9997; padding:6px 12px; background:#fff; border:1px solid #d6d3d1; border-radius:8px; font-size:12px; cursor:pointer; box-shadow:0 1px 2px rgba(0,0,0,.05);">Sign out</button>
 <div id="root"></div>
 
@@ -142,6 +151,12 @@ window.addEventListener('unhandledrejection', function (e) {
     }
   };
 
+  // Second gate on top of Google sign-in: a single shared team passcode,
+  // checked client-side. Not real security (it's plain text in this file),
+  // just a light extra step everyone on the team enters once per device.
+  var TEAM_PASSCODE = 'soungiyoun';
+  var PASSCODE_STORAGE_KEY = 'vefive_passcode_ok';
+
   var appReadyFn = null;
   var authed = false;
 
@@ -151,6 +166,7 @@ window.addEventListener('unhandledrejection', function (e) {
     if (authed && appReadyFn) {
       document.getElementById('loading').classList.add('hidden');
       document.getElementById('authgate').style.display = 'none';
+      document.getElementById('passgate').style.display = 'none';
       document.getElementById('signout-btn').style.display = 'block';
       appReadyFn();
     }
@@ -158,13 +174,24 @@ window.addEventListener('unhandledrejection', function (e) {
 
   function showAuthGate() {
     document.getElementById('loading').classList.add('hidden');
+    document.getElementById('passgate').style.display = 'none';
     document.getElementById('authgate').style.display = 'flex';
+  }
+
+  function showPassGate() {
+    document.getElementById('loading').classList.add('hidden');
+    document.getElementById('authgate').style.display = 'none';
+    document.getElementById('passgate').style.display = 'flex';
   }
 
   function onAuthed(user) {
     currentUser = user;
     authed = true;
-    maybeStart();
+    if (localStorage.getItem(PASSCODE_STORAGE_KEY) === '1') {
+      maybeStart();
+    } else {
+      showPassGate();
+    }
   }
 
   document.addEventListener('DOMContentLoaded', function () {
@@ -181,7 +208,20 @@ window.addEventListener('unhandledrejection', function (e) {
       });
     });
 
+    document.getElementById('passform').addEventListener('submit', function (e) {
+      e.preventDefault();
+      var passErrorEl = document.getElementById('pass-error');
+      var input = document.getElementById('pass-input').value;
+      if (input === TEAM_PASSCODE) {
+        localStorage.setItem(PASSCODE_STORAGE_KEY, '1');
+        maybeStart();
+      } else {
+        passErrorEl.textContent = 'Incorrect passcode.';
+      }
+    });
+
     document.getElementById('signout-btn').addEventListener('click', function () {
+      localStorage.removeItem(PASSCODE_STORAGE_KEY);
       sb.auth.signOut().then(function () { location.reload(); });
     });
   });

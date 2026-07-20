@@ -11147,11 +11147,12 @@ function BackupRestoreCard({
     fuelLogs: fuelLogs.length,
     drivers: drivers.length,
     dayLogs: driverDayLogs.length,
-    expenses: expenses.length
+    expenses: expenses.length,
+    paymentTerms: paymentTerms.length
   };
   const handleExport = () => {
     exportBackup(settings, jobs, customers, fuelLogs, drivers, driverDayLogs, expenses, paymentTerms);
-    setToast(`Backup downloaded — ${stats.jobs} jobs, ${stats.customers} customers, ${stats.drivers} drivers, ${stats.dayLogs} day logs, ${stats.fuelLogs} fuel logs, ${stats.expenses} expenses`);
+    setToast(`Backup downloaded — ${stats.jobs} jobs, ${stats.customers} customers, ${stats.drivers} drivers, ${stats.dayLogs} day logs, ${stats.fuelLogs} fuel logs, ${stats.expenses} expenses, ${stats.paymentTerms} payment records`);
   };
   const handleFileSelect = e => {
     const file = e.target.files?.[0];
@@ -11173,12 +11174,13 @@ function BackupRestoreCard({
         const driversArr = Array.isArray(d.drivers) ? d.drivers : [];
         const dayLogsArr = Array.isArray(d.driverDayLogs) ? d.driverDayLogs : [];
         const expensesArr = Array.isArray(d.expenses) ? d.expenses : [];
-        const summary = `${jobsArr.length} jobs, ${custArr.length} customers, ${driversArr.length} drivers, ${dayLogsArr.length} day logs, ${(d.fuelLogs || []).length} fuel logs, ${expensesArr.length} expenses`;
+        const paymentTermsArr = Array.isArray(d.paymentTerms) ? d.paymentTerms : [];
+        const summary = `${jobsArr.length} jobs, ${custArr.length} customers, ${driversArr.length} drivers, ${dayLogsArr.length} day logs, ${(d.fuelLogs || []).length} fuel logs, ${expensesArr.length} expenses, ${paymentTermsArr.length} payment records`;
         const dateStr = backup.exportedAt ? new Date(backup.exportedAt).toLocaleString('en-GB', {
           dateStyle: 'medium',
           timeStyle: 'short'
         }) : 'unknown date';
-        const currentSummary = `${stats.jobs} jobs, ${stats.customers} customers, ${stats.drivers} drivers, ${stats.dayLogs} day logs, ${stats.fuelLogs} fuel logs, ${stats.expenses} expenses`;
+        const currentSummary = `${stats.jobs} jobs, ${stats.customers} customers, ${stats.drivers} drivers, ${stats.dayLogs} day logs, ${stats.fuelLogs} fuel logs, ${stats.expenses} expenses, ${stats.paymentTerms} payment records`;
         const proceed = confirm(`Restore backup from ${dateStr}?\n\n` + `Backup contains:  ${summary}\n` + `Current data:     ${currentSummary}\n\n` + `WARNING: This will REPLACE all current data with the backup.\n\n` + `If you haven't already, click Cancel and download a backup of current data first as a safety net.\n\n` + `Continue with restore?`);
         if (proceed) {
           onImport({
@@ -11188,7 +11190,8 @@ function BackupRestoreCard({
             fuelLogs: Array.isArray(d.fuelLogs) ? d.fuelLogs : [],
             drivers: driversArr,
             driverDayLogs: dayLogsArr,
-            expenses: expensesArr
+            expenses: expensesArr,
+            paymentTerms: paymentTermsArr
           });
           setToast(`Restored ${summary}`);
         }

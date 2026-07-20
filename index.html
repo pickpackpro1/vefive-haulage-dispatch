@@ -11681,7 +11681,7 @@ function PaymentsView({
   // Calculator's auto-sync on save).
   const rows = useMemo(() => {
     const usedJobIds = new Set();
-    const fromJobs = (jobs || []).filter(j => j.status !== 'cancelled').map(j => {
+    const fromJobs = (jobs || []).map(j => {
       const existing = (paymentTerms || []).find(p => p.sourceJobId === j.id);
       if (existing) {
         usedJobIds.add(j.id);

@@ -940,10 +940,11 @@ const migrateJob = j => {
 };
 const hasBackload = job => job.backload != null && (Number(job.backload.loadedMiles) > 0 || Number(job.backload.customerRate) > 0);
 
-/* File attachment limits — localStorage typically caps at ~5MB per origin */
-const MAX_ATTACHMENT_BYTES = 500 * 1024; // 500KB per file
-const STORAGE_SOFT_LIMIT_BYTES = 4 * 1024 * 1024; // warn at 4MB
-const STORAGE_HARD_LIMIT_BYTES = 5 * 1024 * 1024; // block at 5MB
+// Attachments upload straight to the Supabase "attachments" storage bucket —
+// only the public URL is kept on the job, so the job data itself stays tiny
+// regardless of how many photos/PDFs get attached.
+const ATTACHMENTS_BUCKET = 'attachments';
+const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024; // 25MB per file
 
 const formatBytes = bytes => {
   if (!Number.isFinite(bytes) || bytes < 0) return '0 B';
@@ -951,6 +952,8 @@ const formatBytes = bytes => {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
 };
+// Legacy attachments (added before cloud storage) were embedded as base64 —
+// kept for read/preview/download compatibility with jobs saved back then.
 const readFileAsDataUrl = file => new Promise((resolve, reject) => {
   const reader = new FileReader();
   reader.onload = () => resolve(reader.result);
@@ -965,15 +968,9 @@ const blankAttachment = () => ({
   size: 0,
   dataUrl: '',
   url: '',
+  path: '',
   addedAt: ''
 });
-const estimateJobsStorageBytes = jobsArr => {
-  try {
-    return new Blob([JSON.stringify(jobsArr || [])]).size;
-  } catch (_) {
-    return JSON.stringify(jobsArr || []).length;
-  }
-};
 const isImageAttachment = att => (att?.type || '').startsWith('image/');
 const fmtGBP = n => new Intl.NumberFormat('en-GB', {
   style: 'currency',
@@ -14076,57 +14073,63 @@ function AttachmentsEditor({
   const [linkUrl, setLinkUrl] = useState('');
   const [linkName, setLinkName] = useState('');
   const [previewAtt, setPreviewAtt] = useState(null);
-
-  // Approximate browser storage usage. All other jobs + this job's current attachments.
-  const otherBytes = useMemo(() => {
-    const others = (allJobs || []).filter(j => j.id !== currentEditingId);
-    return estimateJobsStorageBytes(others);
-  }, [allJobs, currentEditingId]);
-  const thisJobBytes = useMemo(() => attachments.reduce((s, a) => s + (a.size || (a.dataUrl ? a.dataUrl.length : 0)), 0), [attachments]);
-  const totalBytes = otherBytes + thisJobBytes;
-  const nearLimit = totalBytes > STORAGE_SOFT_LIMIT_BYTES;
+  const [uploading, setUploading] = useState(false);
+  const uploadToBucket = async (file, attId) => {
+    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const path = `${currentEditingId || 'unsaved'}/${attId}_${safeName}`;
+    const { error } = await window.__sb.storage.from(ATTACHMENTS_BUCKET).upload(path, file, {
+      upsert: true
+    });
+    if (error) throw error;
+    const {
+      data
+    } = window.__sb.storage.from(ATTACHMENTS_BUCKET).getPublicUrl(path);
+    return {
+      url: data.publicUrl,
+      path
+    };
+  };
   const addFiles = async files => {
+    setUploading(true);
     const additions = [];
-    let runningTotal = totalBytes;
     let skippedOversize = 0;
-    let skippedStorage = false;
+    let skippedFailed = 0;
     for (const file of Array.from(files)) {
       if (file.size > MAX_ATTACHMENT_BYTES) {
         skippedOversize += 1;
         continue;
       }
-      // Base64 is ~1.37x raw size; budget for that
-      const projected = runningTotal + Math.ceil(file.size * 1.4);
-      if (projected > STORAGE_HARD_LIMIT_BYTES) {
-        skippedStorage = true;
-        break;
-      }
+      const attId = newId('att');
       try {
-        const dataUrl = await readFileAsDataUrl(file);
+        const {
+          url,
+          path
+        } = await uploadToBucket(file, attId);
         additions.push({
           ...blankAttachment(),
-          id: newId('att'),
+          id: attId,
           kind: 'file',
           name: file.name,
           type: file.type || 'application/octet-stream',
           size: file.size,
-          dataUrl,
+          url,
+          path,
           addedAt: new Date().toISOString()
         });
-        runningTotal += dataUrl.length;
       } catch (_) {
-        setToast(`Could not read "${file.name}"`);
+        skippedFailed += 1;
       }
     }
+    setUploading(false);
     if (additions.length) {
       onChange([...attachments, ...additions]);
       setToast(`Added ${additions.length} attachment${additions.length === 1 ? '' : 's'}`);
     }
     if (skippedOversize > 0) {
-      setToast(`${skippedOversize} file${skippedOversize === 1 ? '' : 's'} over ${formatBytes(MAX_ATTACHMENT_BYTES)} — use a Drive/Dropbox link instead`);
+      setToast(`${skippedOversize} file${skippedOversize === 1 ? '' : 's'} over ${formatBytes(MAX_ATTACHMENT_BYTES)} skipped`);
     }
-    if (skippedStorage) {
-      setToast('Stopped — adding more would exceed browser storage. Use links for big files.');
+    if (skippedFailed > 0) {
+      setToast(`${skippedFailed} file${skippedFailed === 1 ? '' : 's'} failed to upload — try again`);
     }
   };
   const addLink = () => {
@@ -14150,29 +14153,41 @@ function AttachmentsEditor({
   };
   const removeAttachment = id => {
     if (!confirm('Remove this attachment?')) return;
+    const att = attachments.find(a => a.id === id);
     onChange(attachments.filter(a => a.id !== id));
+    if (att && att.path) {
+      window.__sb.storage.from(ATTACHMENTS_BUCKET).remove([att.path]).catch(() => {});
+    }
   };
+  // File attachments open their cloud storage URL in a new tab — the browser
+  // renders PDFs/images inline there instead of forcing a download, so the
+  // file "lives" in the bucket rather than piling up on the user's device.
   const openAttachment = att => {
     if (att.kind === 'link') {
       window.open(att.url, '_blank', 'noopener,noreferrer');
+      return;
+    }
+    if (isImageAttachment(att) && (att.url || att.dataUrl)) {
+      setPreviewAtt(att);
+      return;
+    }
+    if (att.url) {
+      window.open(att.url, '_blank', 'noopener,noreferrer');
     } else if (att.dataUrl) {
-      if (isImageAttachment(att)) {
-        setPreviewAtt(att);
-      } else {
-        const a = document.createElement('a');
-        a.href = att.dataUrl;
-        a.download = att.name || 'attachment';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-      }
+      // Legacy attachment saved before cloud storage — only a downloadable copy exists.
+      const a = document.createElement('a');
+      a.href = att.dataUrl;
+      a.download = att.name || 'attachment';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
     }
   };
   return /*#__PURE__*/React.createElement("div", {
     className: "space-y-4"
   }, /*#__PURE__*/React.createElement("p", {
     className: "text-xs text-stone-500"
-  }, "POD photos, signed delivery notes, customer confirmation emails. Stored in this browser only. Per-file limit ", formatBytes(MAX_ATTACHMENT_BYTES), " — for anything bigger, save it to Drive or Dropbox and paste the share link below."), attachments.length > 0 && /*#__PURE__*/React.createElement("div", {
+  }, "POD photos, signed delivery notes, order confirmation PDFs. Uploaded straight to cloud storage — only a link is kept on the job, so it won't bloat your saved data. Per-file limit ", formatBytes(MAX_ATTACHMENT_BYTES), "."), attachments.length > 0 && /*#__PURE__*/React.createElement("div", {
     className: "grid sm:grid-cols-2 gap-2"
   }, attachments.map(att => /*#__PURE__*/React.createElement("div", {
     key: att.id,
@@ -14182,12 +14197,12 @@ function AttachmentsEditor({
   }, /*#__PURE__*/React.createElement(ExternalLink, {
     size: 16,
     className: "text-blue-700"
-  })) : isImageAttachment(att) && att.dataUrl ? /*#__PURE__*/React.createElement("button", {
+  })) : isImageAttachment(att) && (att.url || att.dataUrl) ? /*#__PURE__*/React.createElement("button", {
     onClick: () => openAttachment(att),
     className: "flex-shrink-0",
     title: "Preview"
   }, /*#__PURE__*/React.createElement("img", {
-    src: att.dataUrl,
+    src: att.url || att.dataUrl,
     alt: "",
     className: "w-10 h-10 object-cover rounded border border-stone-200"
   })) : /*#__PURE__*/React.createElement("div", {
@@ -14225,11 +14240,11 @@ function AttachmentsEditor({
     className: "hidden"
   }), /*#__PURE__*/React.createElement("button", {
     onClick: () => fileInputRef.current?.click(),
-    disabled: totalBytes >= STORAGE_HARD_LIMIT_BYTES,
+    disabled: uploading,
     className: "bg-stone-100 hover:bg-stone-200 disabled:opacity-50 disabled:cursor-not-allowed border border-stone-300 text-stone-700 text-sm px-4 py-2 rounded inline-flex items-center gap-2"
   }, /*#__PURE__*/React.createElement(Paperclip, {
     size: 14
-  }), " Attach file(s)"), /*#__PURE__*/React.createElement("p", {
+  }), uploading ? 'Uploading…' : 'Attach file(s)'), /*#__PURE__*/React.createElement("p", {
     className: "text-xs text-stone-400 mt-2"
   }, "Images, PDFs, or docs — up to ", formatBytes(MAX_ATTACHMENT_BYTES), " each")), /*#__PURE__*/React.createElement("div", {
     className: "border-t border-stone-100 pt-3"
@@ -14256,16 +14271,11 @@ function AttachmentsEditor({
     className: "mt-2 text-xs text-amber-700 hover:text-amber-800 flex items-center gap-1"
   }, /*#__PURE__*/React.createElement(Plus, {
     size: 12
-  }), " Add link")), /*#__PURE__*/React.createElement("div", {
-    className: `text-xs px-2 py-1.5 rounded flex items-start gap-1.5 ${nearLimit ? 'bg-amber-50 text-amber-900 border border-amber-200' : 'bg-stone-50 text-stone-600 border border-stone-100'}`
-  }, nearLimit && /*#__PURE__*/React.createElement(AlertCircle, {
-    size: 12,
-    className: "mt-0.5 flex-shrink-0"
-  }), /*#__PURE__*/React.createElement("span", null, "Browser storage: ", formatBytes(totalBytes), " of ~", formatBytes(STORAGE_HARD_LIMIT_BYTES), " used", nearLimit && ' — running low. Move older attachments to Drive/Dropbox and replace with links to free space.')), previewAtt && /*#__PURE__*/React.createElement("div", {
+  }), " Add link")), previewAtt && /*#__PURE__*/React.createElement("div", {
     className: "fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-6 cursor-pointer",
     onClick: () => setPreviewAtt(null)
   }, /*#__PURE__*/React.createElement("img", {
-    src: previewAtt.dataUrl,
+    src: previewAtt.url || previewAtt.dataUrl,
     alt: previewAtt.name,
     className: "max-w-full max-h-full object-contain",
     onClick: e => e.stopPropagation()

@@ -4048,6 +4048,7 @@ function HaulageDispatchDashboard() {
   const [driverDayLogs, setDriverDayLogs] = useState([]);
   const [expenses, setExpenses] = useState([]);
   const [paymentTerms, setPaymentTerms] = useState([]);
+  const [checkinSettings, setCheckinSettings] = useState({ warehousePostcode: '' });
   const [job, setJob] = useState(blankJob());
   const [editingId, setEditingId] = useState(null);
   const [toast, setToast] = useState('');
@@ -4088,6 +4089,10 @@ function HaulageDispatchDashboard() {
         const pt = await window.storage.get('paymentTerms');
         if (pt?.value) setPaymentTerms(JSON.parse(pt.value));
       } catch (_) {}
+      try {
+        const cs = await window.storage.get('checkinSettings');
+        if (cs?.value) setCheckinSettings(prev => ({ ...prev, ...JSON.parse(cs.value) }));
+      } catch (_) {}
       setLoaded(true);
     })();
   }, []);
@@ -4115,6 +4120,9 @@ function HaulageDispatchDashboard() {
   useEffect(() => {
     if (loaded) window.storage.set('paymentTerms', JSON.stringify(paymentTerms)).catch(() => {});
   }, [paymentTerms, loaded]);
+  useEffect(() => {
+    if (loaded) window.storage.set('checkinSettings', JSON.stringify(checkinSettings)).catch(() => {});
+  }, [checkinSettings, loaded]);
 
   // One-time migration: if existing jobs carry driverHours and no day logs have
   // been seeded yet, populate the log from those job hours. Tracked via a
@@ -4512,7 +4520,7 @@ function HaulageDispatchDashboard() {
     className: "border-b border-stone-200 bg-white sticky top-0 z-10 print:hidden"
   }, /*#__PURE__*/React.createElement("div", {
     className: "max-w-6xl mx-auto px-6 flex gap-1 overflow-x-auto"
-  }, [['calculator', 'Calculator', CalcIcon, null], ['today', 'Today', ClipboardList, todayJobs.length || null], ['schedule', 'Schedule', Clock, null], ['backloads', 'Backloads', ArrowDownUp, backloadBuckets.awaiting.length || null], ['fuel', 'Fuel', Fuel, null], ['history', 'History', LineChartIcon, null], ['reports', 'Reports', FileText, null], ['pnl', 'P&L', PoundSterling, null], ['customers', 'Customers', Users, customers.length || null], ['drivers', 'Drivers', User, drivers.length || null], ['loads', 'Loads', Upload, null], ['payments', 'Payments', Receipt, paymentsDueSoon || null], ['previousJobs', 'Previous Jobs', Copy, repeatCustomerGroups.length || null], ['settings', 'Settings', SettingsIcon, null]].map(([key, label, Icon, badge]) => /*#__PURE__*/React.createElement("button", {
+  }, [['calculator', 'Calculator', CalcIcon, null], ['today', 'Today', ClipboardList, todayJobs.length || null], ['schedule', 'Schedule', Clock, null], ['backloads', 'Backloads', ArrowDownUp, backloadBuckets.awaiting.length || null], ['fuel', 'Fuel', Fuel, null], ['history', 'History', LineChartIcon, null], ['reports', 'Reports', FileText, null], ['pnl', 'P&L', PoundSterling, null], ['customers', 'Customers', Users, customers.length || null], ['drivers', 'Drivers', User, drivers.length || null], ['loads', 'Loads', Upload, null], ['payments', 'Payments', Receipt, paymentsDueSoon || null], ['checkin', 'Check-In', MapPin, null], ['previousJobs', 'Previous Jobs', Copy, repeatCustomerGroups.length || null], ['settings', 'Settings', SettingsIcon, null]].map(([key, label, Icon, badge]) => /*#__PURE__*/React.createElement("button", {
     key: key,
     onClick: () => setTab(key),
     className: `flex items-center gap-2 px-4 py-3 text-sm border-b-2 transition-colors whitespace-nowrap ${tab === key ? 'border-amber-700 text-amber-800 font-medium' : 'border-transparent text-stone-500 hover:text-stone-900'}`
@@ -4638,6 +4646,13 @@ function HaulageDispatchDashboard() {
     markPaymentPaid: markPaymentPaid,
     updatePaymentTerm: updatePaymentTerm,
     deletePaymentTerm: deletePaymentTerm,
+    setToast: setToast
+  }), tab === 'checkin' && /*#__PURE__*/React.createElement(CheckInAdminView, {
+    drivers: drivers,
+    driverDayLogs: driverDayLogs,
+    settings: settings,
+    checkinSettings: checkinSettings,
+    setCheckinSettings: setCheckinSettings,
     setToast: setToast
   }), tab === 'previousJobs' && /*#__PURE__*/React.createElement(PreviousJobsView, {
     repeatCustomerGroups: repeatCustomerGroups,
@@ -12036,6 +12051,226 @@ function PaymentsView({
   }, /*#__PURE__*/React.createElement(Trash2, {
     size: 14
   }))))))))));
+}
+
+/* ================================================================== */
+/*  Check-In — GPS driver check-in/out config + activity, mirrors what */
+/*  /checkin/admin/ configures and what the GPS check-in page writes  */
+/* ================================================================== */
+function CheckInAdminView({
+  drivers,
+  driverDayLogs,
+  settings,
+  checkinSettings,
+  setCheckinSettings,
+  setToast
+}) {
+  const [postcodeInput, setPostcodeInput] = useState(checkinSettings.warehousePostcode || settings.yardPostcode || '');
+  const [range, setRange] = useState(() => ({
+    start: minusDaysIso(30),
+    end: todayIsoStr()
+  }));
+  const reportPresets = useMemo(() => {
+    const today = todayIsoStr();
+    return [{
+      label: 'Last 7d',
+      start: minusDaysIso(7),
+      end: today
+    }, {
+      label: 'Last 30d',
+      start: minusDaysIso(30),
+      end: today
+    }, {
+      label: 'This month',
+      start: today.slice(0, 7) + '-01',
+      end: today
+    }];
+  }, []);
+  const driverName = id => (drivers || []).find(d => d.id === id)?.name || 'Unknown driver';
+  const gpsLogs = useMemo(() => (driverDayLogs || []).filter(l => l.source === 'gps').sort((a, b) => (b.checkInAt || '').localeCompare(a.checkInAt || '')), [driverDayLogs]);
+  const currentlyCheckedIn = useMemo(() => gpsLogs.filter(l => l.checkInAt && !l.checkOutAt), [gpsLogs]);
+  const inRangeLogs = useMemo(() => gpsLogs.filter(l => l.date >= range.start && l.date <= range.end), [gpsLogs, range]);
+  const chartData = useMemo(() => {
+    const map = new Map();
+    for (const l of inRangeLogs) {
+      const name = driverName(l.driverId);
+      map.set(name, (map.get(name) || 0) + Number(l.hours || 0));
+    }
+    return [...map.entries()].map(([name, hours]) => ({
+      name,
+      hours: Math.round(hours * 100) / 100
+    })).sort((a, b) => b.hours - a.hours);
+  }, [inRangeLogs, drivers]);
+  const totalGpsHours = chartData.reduce((s, r) => s + r.hours, 0);
+  const savePostcode = () => {
+    const val = postcodeInput.trim();
+    if (!val) {
+      setToast('Enter a postcode first');
+      return;
+    }
+    setCheckinSettings({
+      ...checkinSettings,
+      warehousePostcode: val
+    });
+    setToast('Warehouse postcode saved');
+  };
+  const mapLink = (lat, lng) => lat != null && lng != null ? `https://www.google.com/maps?q=${lat},${lng}` : null;
+  return /*#__PURE__*/React.createElement("div", {
+    className: "space-y-6"
+  }, /*#__PURE__*/React.createElement(Card, null, /*#__PURE__*/React.createElement(SectionTitle, {
+    icon: MapPin
+  }, "GPS check-in settings"), /*#__PURE__*/React.createElement("p", {
+    className: "text-sm text-stone-600 mb-3"
+  }, "Drivers use ", /*#__PURE__*/React.createElement("a", {
+    href: "https://pickpackpro1.github.io/vefive-haulage-dispatch/checkin/",
+    target: "_blank",
+    rel: "noopener noreferrer",
+    className: "text-amber-700 underline"
+  }, "/checkin/"), " on their phone to log their hours — they need to be within 100m of the postcode below to check in or out."), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-end gap-3 flex-wrap"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex-1 min-w-[160px]"
+  }, /*#__PURE__*/React.createElement(Field, {
+    label: "Warehouse postcode",
+    value: postcodeInput,
+    onChange: setPostcodeInput,
+    placeholder: "e.g. MK1 1AA"
+  })), /*#__PURE__*/React.createElement("button", {
+    onClick: savePostcode,
+    className: "bg-amber-700 hover:bg-amber-800 text-white text-sm px-4 py-2 rounded"
+  }, "Save"))), currentlyCheckedIn.length > 0 && /*#__PURE__*/React.createElement(Card, null, /*#__PURE__*/React.createElement(SectionTitle, {
+    icon: Clock
+  }, "Currently checked in (", currentlyCheckedIn.length, ")"), /*#__PURE__*/React.createElement("div", {
+    className: "space-y-2"
+  }, currentlyCheckedIn.map(l => /*#__PURE__*/React.createElement("div", {
+    key: l.id,
+    className: "flex items-center justify-between text-sm bg-emerald-50 border border-emerald-200 rounded px-3 py-2"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "font-medium"
+  }, driverName(l.driverId)), /*#__PURE__*/React.createElement("span", {
+    className: "text-stone-600"
+  }, l.date, " · since ", new Date(l.checkInAt).toLocaleTimeString('en-GB', {
+    hour: '2-digit',
+    minute: '2-digit'
+  })))))), /*#__PURE__*/React.createElement(Card, null, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between flex-wrap gap-3 mb-4"
+  }, /*#__PURE__*/React.createElement(SectionTitle, {
+    icon: TrendingUp
+  }, "GPS hours by driver"), /*#__PURE__*/React.createElement(DateRangePicker, {
+    presets: reportPresets,
+    range: range,
+    onChange: setRange
+  })), chartData.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    className: "text-sm text-stone-500 py-8 text-center"
+  }, "No GPS check-ins in this period.") : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "text-sm text-stone-600 mb-3"
+  }, "Total: ", /*#__PURE__*/React.createElement("span", {
+    className: "font-medium"
+  }, totalGpsHours.toFixed(2), "h")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: '100%',
+      height: 220
+    }
+  }, /*#__PURE__*/React.createElement(ResponsiveContainer, null, /*#__PURE__*/React.createElement(BarChart, {
+    data: chartData,
+    margin: {
+      top: 10,
+      right: 10,
+      bottom: 0,
+      left: -10
+    }
+  }, /*#__PURE__*/React.createElement(CartesianGrid, {
+    stroke: "#e7e5e4",
+    strokeDasharray: "3 3",
+    vertical: false
+  }), /*#__PURE__*/React.createElement(XAxis, {
+    dataKey: "name",
+    tick: {
+      fontSize: 11,
+      fill: '#78716c'
+    }
+  }), /*#__PURE__*/React.createElement(YAxis, {
+    tick: {
+      fontSize: 11,
+      fill: '#78716c'
+    },
+    tickFormatter: v => `${v}h`
+  }), /*#__PURE__*/React.createElement(Tooltip, {
+    contentStyle: {
+      background: 'white',
+      border: '1px solid #e7e5e4',
+      borderRadius: 4,
+      fontSize: 12
+    },
+    formatter: v => `${v}h`
+  }), /*#__PURE__*/React.createElement(Bar, {
+    dataKey: "hours",
+    fill: "#b45309",
+    radius: [3, 3, 0, 0]
+  })))))), /*#__PURE__*/React.createElement(Card, null, /*#__PURE__*/React.createElement(SectionTitle, {
+    icon: ClipboardList
+  }, "Recent GPS check-ins"), gpsLogs.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    className: "text-sm text-stone-500 py-8 text-center"
+  }, "No GPS check-ins yet.") : /*#__PURE__*/React.createElement("div", {
+    className: "overflow-x-auto"
+  }, /*#__PURE__*/React.createElement("table", {
+    className: "w-full text-sm"
+  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", {
+    className: "text-left text-xs uppercase tracking-wider text-stone-500 border-b border-stone-200"
+  }, /*#__PURE__*/React.createElement("th", {
+    className: "py-2 pr-3"
+  }, "Driver"), /*#__PURE__*/React.createElement("th", {
+    className: "py-2 pr-3"
+  }, "Date"), /*#__PURE__*/React.createElement("th", {
+    className: "py-2 pr-3"
+  }, "Check-in"), /*#__PURE__*/React.createElement("th", {
+    className: "py-2 pr-3"
+  }, "Check-out"), /*#__PURE__*/React.createElement("th", {
+    className: "py-2 pr-3 text-right"
+  }, "Hours"))), /*#__PURE__*/React.createElement("tbody", null, gpsLogs.slice(0, 50).map(l => /*#__PURE__*/React.createElement("tr", {
+    key: l.id,
+    className: "border-b border-stone-100 last:border-0"
+  }, /*#__PURE__*/React.createElement("td", {
+    className: "py-2 pr-3 font-medium"
+  }, driverName(l.driverId)), /*#__PURE__*/React.createElement("td", {
+    className: "py-2 pr-3",
+    style: {
+      fontFamily: "'JetBrains Mono', monospace"
+    }
+  }, l.date), /*#__PURE__*/React.createElement("td", {
+    className: "py-2 pr-3"
+  }, mapLink(l.checkInLat, l.checkInLng) ? /*#__PURE__*/React.createElement("a", {
+    href: mapLink(l.checkInLat, l.checkInLng),
+    target: "_blank",
+    rel: "noopener noreferrer",
+    className: "text-amber-700 underline"
+  }, new Date(l.checkInAt).toLocaleTimeString('en-GB', {
+    hour: '2-digit',
+    minute: '2-digit'
+  })) : (l.checkInAt ? new Date(l.checkInAt).toLocaleTimeString('en-GB', {
+    hour: '2-digit',
+    minute: '2-digit'
+  }) : '—')), /*#__PURE__*/React.createElement("td", {
+    className: "py-2 pr-3"
+  }, l.checkOutAt ? (mapLink(l.checkOutLat, l.checkOutLng) ? /*#__PURE__*/React.createElement("a", {
+    href: mapLink(l.checkOutLat, l.checkOutLng),
+    target: "_blank",
+    rel: "noopener noreferrer",
+    className: "text-amber-700 underline"
+  }, new Date(l.checkOutAt).toLocaleTimeString('en-GB', {
+    hour: '2-digit',
+    minute: '2-digit'
+  })) : new Date(l.checkOutAt).toLocaleTimeString('en-GB', {
+    hour: '2-digit',
+    minute: '2-digit'
+  })) : /*#__PURE__*/React.createElement("span", {
+    className: "text-emerald-700 text-xs uppercase tracking-wider"
+  }, "In progress")), /*#__PURE__*/React.createElement("td", {
+    className: "py-2 pr-3 text-right",
+    style: {
+      fontFamily: "'JetBrains Mono', monospace"
+    }
+  }, Number(l.hours || 0).toFixed(2), "h"))))))));
 }
 
 /* ================================================================== */

@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1" />
+<title>Driver Check-In — Vefive</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: #fafaf9;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    color: #292524;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+  .card {
+    width: 100%;
+    max-width: 380px;
+    background: #fff;
+    border: 1px solid #e7e5e4;
+    border-radius: 16px;
+    padding: 28px 24px;
+    box-shadow: 0 10px 15px -3px rgba(0,0,0,.08);
+    text-align: center;
+  }
+  h1 { font-size: 19px; font-weight: 700; margin: 0 0 4px; }
+  .sub { font-size: 13px; color: #78716c; margin: 0 0 22px; }
+  input[type="text"], input[type="password"] {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 12px 14px;
+    border: 1px solid #d6d3d1;
+    border-radius: 10px;
+    font-size: 16px;
+    margin-bottom: 12px;
+    text-align: center;
+    letter-spacing: 1px;
+  }
+  button {
+    width: 100%;
+    padding: 13px;
+    border: none;
+    border-radius: 10px;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .btn-primary { background: #b45309; color: #fff; }
+  .btn-primary:disabled { background: #d6d3d1; color: #a8a29e; cursor: not-allowed; }
+  .btn-danger { background: #b91c1c; color: #fff; }
+  .btn-secondary { background: #f5f5f4; color: #44403c; border: 1px solid #d6d3d1; }
+  .error { color: #b91c1c; font-size: 13px; margin: 0 0 12px; min-height: 16px; }
+  .status-ok { color: #047857; }
+  .status-bad { color: #b91c1c; }
+  .driver-name { font-size: 22px; font-weight: 700; margin: 4px 0 2px; }
+  .distance { font-size: 13px; color: #78716c; margin-bottom: 18px; }
+  .spinner {
+    width: 26px; height: 26px; margin: 0 auto 14px;
+    border: 3px solid #e7e5e4; border-top-color: #b45309; border-radius: 50%;
+    animation: spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .summary-row { display: flex; justify-content: space-between; font-size: 14px; padding: 6px 0; border-bottom: 1px solid #f5f5f4; }
+  .summary-row:last-child { border-bottom: none; }
+  .link-btn { background: none; border: none; color: #b45309; font-size: 13px; text-decoration: underline; padding: 6px; margin-top: 10px; cursor: pointer; }
+</style>
+</head>
+<body>
+<div id="app" class="card">
+  <div class="spinner"></div>
+  <p class="sub">Loading…</p>
+</div>
+
+<script>
+(function () {
+  var SUPABASE_URL = 'https://rkeqyydekyiahlnyovvs.supabase.co';
+  var SUPABASE_ANON_KEY = 'sb_publishable_VwrybW--aZbDv1Ea7OoKLg_Mw5KwmvA';
+  var GEOFENCE_METRES = 100;
+  var sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  var app = document.getElementById('app');
+
+  var newId = function (p) { return p + '_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7); };
+  var todayStrLocal = function () {
+    var d = new Date();
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  };
+  var haversineMetres = function (lat1, lng1, lat2, lng2) {
+    var R = 6371000;
+    var toRad = function (v) { return v * Math.PI / 180; };
+    var dLat = toRad(lat2 - lat1);
+    var dLng = toRad(lng2 - lng1);
+    var a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+    return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+  };
+
+  function getJson(key, fallback) {
+    return sb.from('app_data').select('value').eq('key', key).maybeSingle().then(function (res) {
+      if (res.error) throw res.error;
+      return res.data ? JSON.parse(res.data.value) : fallback;
+    });
+  }
+  function setJson(key, value) {
+    return sb.from('app_data').upsert({ key: key, value: JSON.stringify(value), updated_at: new Date().toISOString() }).then(function (res) {
+      if (res.error) throw res.error;
+    });
+  }
+  function geocodePostcode(postcode) {
+    var cacheKey = 'vefive_checkin_geocode_' + postcode.replace(/\s+/g, '').toUpperCase();
+    var cached = sessionStorage.getItem(cacheKey);
+    if (cached) return Promise.resolve(JSON.parse(cached));
+    return fetch('https://api.postcodes.io/postcodes/' + encodeURIComponent(postcode.trim()))
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        // Retired/terminated postcodes (postcodes.io still has coordinates for
+        // these, just under `terminated` instead of `result`) — the yard
+        // postcode in Settings may well be one of these.
+        var source = data.result || data.terminated;
+        if (!source) throw new Error('Could not look up the warehouse postcode (' + postcode + ')');
+        var coords = { lat: source.latitude, lng: source.longitude };
+        sessionStorage.setItem(cacheKey, JSON.stringify(coords));
+        return coords;
+      });
+  }
+  function getLocation() {
+    return new Promise(function (resolve, reject) {
+      if (!navigator.geolocation) { reject(new Error('This browser does not support location.')); return; }
+      navigator.geolocation.getCurrentPosition(
+        function (pos) { resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy }); },
+        function (err) { reject(new Error(err.code === 1 ? 'Location permission denied — allow location access and reload.' : 'Could not get your location: ' + err.message)); },
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+      );
+    });
+  }
+
+  function render(html) { app.innerHTML = html; }
+
+  function showLoading(msg) {
+    render('<div class="spinner"></div><p class="sub">' + (msg || 'Loading…') + '</p>');
+  }
+
+  function showFatal(msg) {
+    render('<h1>Something went wrong</h1><p class="error" style="margin-top:8px">' + msg + '</p><button class="btn-secondary" onclick="location.reload()">Try again</button>');
+  }
+
+  // ---- Passcode screen ------------------------------------------------
+  function showPasscodeScreen(drivers, warehouseCoords) {
+    render(
+      '<h1>Vefive Driver Check-In</h1>' +
+      '<p class="sub">Enter your passcode to continue</p>' +
+      '<input type="password" id="pc-input" inputmode="numeric" placeholder="Passcode" autofocus />' +
+      '<div class="error" id="pc-error"></div>' +
+      '<button class="btn-primary" id="pc-submit">Continue</button>'
+    );
+    var input = document.getElementById('pc-input');
+    var errEl = document.getElementById('pc-error');
+    var submit = function () {
+      var val = input.value.trim();
+      if (!val) return;
+      var match = drivers.find(function (d) { return d.active !== false && String(d.passcode || '').trim() === val; });
+      if (!match) { errEl.textContent = 'Incorrect passcode.'; return; }
+      startDriverFlow(match, warehouseCoords);
+    };
+    document.getElementById('pc-submit').addEventListener('click', submit);
+    input.addEventListener('keydown', function (e) { if (e.key === 'Enter') submit(); });
+  }
+
+  // ---- Main driver flow: locate, check distance, show action ----------
+  function startDriverFlow(driver, warehouseCoords) {
+    showLoading('Getting your location…');
+    getLocation().then(function (loc) {
+      var distance = haversineMetres(loc.lat, loc.lng, warehouseCoords.lat, warehouseCoords.lng);
+      getJson('driverDayLogs', []).then(function (logs) {
+        var today = todayStrLocal();
+        var todayLog = logs.find(function (l) { return l.driverId === driver.id && l.date === today; });
+        renderDriverScreen(driver, warehouseCoords, loc, distance, logs, todayLog);
+      }).catch(function (e) { showFatal(e.message || String(e)); });
+    }).catch(function (e) { showLocationError(driver, warehouseCoords, e.message); });
+  }
+
+  function showLocationError(driver, warehouseCoords, msg) {
+    render(
+      '<div class="driver-name">' + escapeHtml(driver.name) + '</div>' +
+      '<p class="error" style="margin-top:10px">' + escapeHtml(msg) + '</p>' +
+      '<button class="btn-primary" id="retry-btn">Try again</button>'
+    );
+    document.getElementById('retry-btn').addEventListener('click', function () { startDriverFlow(driver, warehouseCoords); });
+  }
+
+  function renderDriverScreen(driver, warehouseCoords, loc, distance, logs, todayLog) {
+    var withinRange = distance <= GEOFENCE_METRES;
+    var distText = distance < 1000 ? Math.round(distance) + 'm from the warehouse' : (distance / 1000).toFixed(1) + 'km from the warehouse';
+    var checkedIn = todayLog && todayLog.checkInAt && !todayLog.checkOutAt;
+    var completed = todayLog && todayLog.checkInAt && todayLog.checkOutAt;
+
+    var body = '<div class="driver-name">' + escapeHtml(driver.name) + '</div>';
+    body += '<div class="distance ' + (withinRange ? 'status-ok' : 'status-bad') + '">' + distText + '</div>';
+
+    if (completed) {
+      body += '<div class="summary-row"><span>Checked in</span><span>' + fmtTime(todayLog.checkInAt) + '</span></div>';
+      body += '<div class="summary-row"><span>Checked out</span><span>' + fmtTime(todayLog.checkOutAt) + '</span></div>';
+      body += '<div class="summary-row"><span>Hours logged</span><span>' + Number(todayLog.hours).toFixed(2) + 'h</span></div>';
+      body += '<p class="sub" style="margin-top:14px">You\'ve completed your shift today. Contact dispatch if this needs correcting.</p>';
+      render(body);
+      return;
+    }
+
+    if (!withinRange) {
+      body += '<p class="error" style="margin-top:4px">You\'re too far from the warehouse to check ' + (checkedIn ? 'out' : 'in') + '.</p>';
+      body += '<button class="btn-secondary" id="retry-btn">Refresh location</button>';
+      render(body);
+      document.getElementById('retry-btn').addEventListener('click', function () { startDriverFlow(driver, warehouseCoords); });
+      return;
+    }
+
+    if (checkedIn) {
+      body += '<div class="summary-row"><span>Checked in</span><span>' + fmtTime(todayLog.checkInAt) + '</span></div>';
+      body += '<button class="btn-danger" id="action-btn" style="margin-top:14px">Check Out</button>';
+      body += '<div class="error" id="action-error"></div>';
+      render(body);
+      document.getElementById('action-btn').addEventListener('click', function () {
+        doCheckOut(driver, warehouseCoords, logs, todayLog);
+      });
+    } else {
+      body += '<button class="btn-primary" id="action-btn">Check In</button>';
+      body += '<div class="error" id="action-error"></div>';
+      render(body);
+      document.getElementById('action-btn').addEventListener('click', function () {
+        doCheckIn(driver, warehouseCoords, logs, loc);
+      });
+    }
+  }
+
+  function doCheckIn(driver, warehouseCoords, logs, loc) {
+    showLoading('Checking in…');
+    var now = new Date().toISOString();
+    var entry = {
+      id: newId('daylog'),
+      driverId: driver.id,
+      date: todayStrLocal(),
+      hours: 0,
+      notes: '',
+      updatedAt: now,
+      source: 'gps',
+      checkInAt: now,
+      checkInLat: loc.lat,
+      checkInLng: loc.lng,
+      checkOutAt: '',
+      checkOutLat: null,
+      checkOutLng: null
+    };
+    var updated = logs.concat([entry]);
+    setJson('driverDayLogs', updated).then(function () {
+      startDriverFlow(driver, warehouseCoords);
+    }).catch(function (e) { showFatal('Could not save check-in: ' + (e.message || e)); });
+  }
+
+  function doCheckOut(driver, warehouseCoords, logs, todayLog) {
+    showLoading('Getting your location…');
+    getLocation().then(function (loc) {
+      var distance = haversineMetres(loc.lat, loc.lng, warehouseCoords.lat, warehouseCoords.lng);
+      if (distance > GEOFENCE_METRES) {
+        renderDriverScreen(driver, warehouseCoords, loc, distance, logs, todayLog);
+        return;
+      }
+      showLoading('Checking out…');
+      var now = new Date().toISOString();
+      var hours = Math.max(0, (new Date(now) - new Date(todayLog.checkInAt)) / 3600000);
+      var updated = logs.map(function (l) {
+        if (l.id !== todayLog.id) return l;
+        return Object.assign({}, l, {
+          checkOutAt: now,
+          checkOutLat: loc.lat,
+          checkOutLng: loc.lng,
+          hours: Math.round(hours * 100) / 100,
+          updatedAt: now
+        });
+      });
+      setJson('driverDayLogs', updated).then(function () {
+        startDriverFlow(driver, warehouseCoords);
+      }).catch(function (e) { showFatal('Could not save check-out: ' + (e.message || e)); });
+    }).catch(function (e) { showFatal(e.message || String(e)); });
+  }
+
+  function fmtTime(iso) {
+    return new Date(iso).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  }
+  function escapeHtml(s) {
+    var div = document.createElement('div');
+    div.textContent = s || '';
+    return div.innerHTML;
+  }
+
+  // ---- Boot -------------------------------------------------------------
+  showLoading('Loading…');
+  Promise.all([
+    getJson('drivers', []),
+    getJson('settings', {})
+  ]).then(function (results) {
+    var drivers = results[0];
+    var settings = results[1];
+    var postcode = settings.yardPostcode || 'MK1 1AA';
+    return geocodePostcode(postcode).then(function (coords) {
+      showPasscodeScreen(drivers, coords);
+    });
+  }).catch(function (e) {
+    showFatal(e.message || String(e));
+  });
+})();
+</script>
+</body>
+</html>

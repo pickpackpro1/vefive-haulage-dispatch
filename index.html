@@ -920,7 +920,11 @@ const blankDriver = () => ({
   hourlyRateOverride: '',
   active: true,
   notes: '',
-  createdAt: ''
+  createdAt: '',
+  // Used only by the GPS Check-In page — the driver types this in on their
+  // phone to identify themselves. Not a real account, just a shared secret
+  // like the rest of this app's light auth.
+  passcode: ''
 });
 const blankFuelLog = () => ({
   id: '',
@@ -937,7 +941,16 @@ const blankDriverDayLog = () => ({
   date: '',
   hours: 0,
   notes: '',
-  updatedAt: ''
+  updatedAt: '',
+  // Set only when this row came from the GPS Check-In page rather than
+  // being typed in manually on the Drivers tab.
+  source: '',
+  checkInAt: '',
+  checkInLat: null,
+  checkInLng: null,
+  checkOutAt: '',
+  checkOutLat: null,
+  checkOutLng: null
 });
 // A payment term record — one per load PDF imported, tracking who owes us,
 // how much, and by when. loadId/reference are for display only; dueDate is
@@ -14258,6 +14271,12 @@ function DriverEdit({
     value: d.licenceCategories,
     onChange: v => upd('licenceCategories', v),
     placeholder: "C+E, CPC valid to 03/29"
+  }), /*#__PURE__*/React.createElement(Field, {
+    label: "Check-in passcode",
+    hint: "What this driver types into the GPS Check-In page to identify themselves",
+    value: d.passcode,
+    onChange: v => upd('passcode', v),
+    placeholder: "e.g. a 4-digit PIN"
   }), /*#__PURE__*/React.createElement("div", {
     className: "border-t border-stone-100 pt-4"
   }, /*#__PURE__*/React.createElement("div", {

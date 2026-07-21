@@ -195,11 +195,14 @@
   function renderDriverScreen(driver, warehouseCoords, loc, distance, logs, todayLog) {
     var withinRange = distance <= GEOFENCE_METRES;
     var distText = distance < 1000 ? Math.round(distance) + 'm from the warehouse' : (distance / 1000).toFixed(1) + 'km from the warehouse';
+    // GPS/WiFi location accuracy varies reading to reading — surfacing it
+    // makes that visible instead of the distance looking randomly wrong.
+    var accuracyText = loc.accuracy != null ? ' (±' + Math.round(loc.accuracy) + 'm accuracy)' : '';
     var checkedIn = todayLog && todayLog.checkInAt && !todayLog.checkOutAt;
     var completed = todayLog && todayLog.checkInAt && todayLog.checkOutAt;
 
     var body = '<div class="driver-name">' + escapeHtml(driver.name) + '</div>';
-    body += '<div class="distance ' + (withinRange ? 'status-ok' : 'status-bad') + '">' + distText + '</div>';
+    body += '<div class="distance ' + (withinRange ? 'status-ok' : 'status-bad') + '">' + distText + accuracyText + '</div>';
 
     if (completed) {
       body += '<div class="summary-row"><span>Checked in</span><span>' + fmtTime(todayLog.checkInAt) + '</span></div>';

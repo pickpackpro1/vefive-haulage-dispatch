@@ -4723,7 +4723,8 @@ function Calculator({
   clearForm,
   editingId,
   duplicateJob,
-  setToast
+  setToast,
+  autoCalculateOnFill
 }) {
   const upd = (k, v) => setJob({
     ...job,
@@ -4808,6 +4809,18 @@ function Calculator({
       setLooking(false);
     }
   };
+  // Used only by the Loads/PDF import preview: once all three locations are
+  // filled in (vehicle location is the one field the user has to type
+  // themselves, after which pickup/delivery are already set from the PDF),
+  // auto-calculate fires once on its own instead of waiting for a click.
+  const autoLookupFiredRef = useRef(false);
+  useEffect(() => {
+    if (!autoCalculateOnFill || autoLookupFiredRef.current) return;
+    if (job.vehicleLocation && job.pickupLocation && job.deliveryLocation) {
+      autoLookupFiredRef.current = true;
+      lookupAll();
+    }
+  }, [autoCalculateOnFill, job.vehicleLocation, job.pickupLocation, job.deliveryLocation]);
   const addViaStop = () => setJob({
     ...job,
     viaStops: [...(job.viaStops || []), {
@@ -11282,7 +11295,10 @@ function BackupRestoreCard({
 // Maps the fields pulled off a shipment PDF onto a blank job, ready to drop
 // into the Calculator so it can be reviewed/edited before saving. Only maps
 // what the PDF reliably gives us — vehicle/status/driver/times are left for
-// the user to set, same as any manually-entered job.
+// the user to set, same as any manually-entered job. Payment terms are
+// deliberately left out — the "Payment terms" card further down this same
+// view is what saves those to the Payments tab, so setting it here too
+// would just be a second, redundant place doing the same job.
 function buildJobFromPdfFields(f, settings) {
   const activeVehicles = (settings.vehicles || []).filter(v => v.active);
   return {
@@ -11295,7 +11311,6 @@ function buildJobFromPdfFields(f, settings) {
     pickupLocation: (f.pickupAddress || []).join(', '),
     deliveryLocation: (f.deliveryAddress || []).join(', '),
     customerRate: parseMoneyValue(f.agreedRateRaw) || 0,
-    paymentTermsRaw: f.paymentTermsRaw || '',
     notes: f.notes || ''
   };
 }
@@ -11555,7 +11570,8 @@ function PdfImportView({
     clearForm: () => setPdfJob(buildJobFromPdfFields(fields, settings)),
     editingId: null,
     duplicateJob: () => {},
-    setToast: setToast
+    setToast: setToast,
+    autoCalculateOnFill: true
   }));
   return /*#__PURE__*/React.createElement("div", {
     className: "space-y-6"

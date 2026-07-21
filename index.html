@@ -4724,7 +4724,7 @@ function Calculator({
   editingId,
   duplicateJob,
   setToast,
-  autoCalculateOnFill
+  hidePaymentTerms
 }) {
   const upd = (k, v) => setJob({
     ...job,
@@ -4809,18 +4809,6 @@ function Calculator({
       setLooking(false);
     }
   };
-  // Used only by the Loads/PDF import preview: once all three locations are
-  // filled in (vehicle location is the one field the user has to type
-  // themselves, after which pickup/delivery are already set from the PDF),
-  // auto-calculate fires once on its own instead of waiting for a click.
-  const autoLookupFiredRef = useRef(false);
-  useEffect(() => {
-    if (!autoCalculateOnFill || autoLookupFiredRef.current) return;
-    if (job.vehicleLocation && job.pickupLocation && job.deliveryLocation) {
-      autoLookupFiredRef.current = true;
-      lookupAll();
-    }
-  }, [autoCalculateOnFill, job.vehicleLocation, job.pickupLocation, job.deliveryLocation]);
   const addViaStop = () => setJob({
     ...job,
     viaStops: [...(job.viaStops || []), {
@@ -5081,7 +5069,7 @@ function Calculator({
     type: "number",
     value: job.customerRate,
     onChange: v => upd('customerRate', v)
-  }), /*#__PURE__*/React.createElement(Select, {
+  }), !hidePaymentTerms && /*#__PURE__*/React.createElement(Select, {
     label: "Payment terms (optional)",
     value: job.paymentTermsRaw || '',
     onChange: v => upd('paymentTermsRaw', v),
@@ -11571,7 +11559,7 @@ function PdfImportView({
     editingId: null,
     duplicateJob: () => {},
     setToast: setToast,
-    autoCalculateOnFill: true
+    hidePaymentTerms: true
   }));
   return /*#__PURE__*/React.createElement("div", {
     className: "space-y-6"

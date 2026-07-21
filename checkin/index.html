@@ -306,6 +306,14 @@
     var drivers = results[0];
     var settings = results[1];
     var checkinSettings = results[2];
+    if (checkinSettings.geofenceRadiusM) GEOFENCE_METRES = Number(checkinSettings.geofenceRadiusM) || GEOFENCE_METRES;
+    // A manual lat/lng override (set at /checkin/admin/, e.g. for testing
+    // outside the UK where the postcode lookup doesn't apply) always wins
+    // over geocoding a postcode.
+    if (checkinSettings.warehouseLat != null && checkinSettings.warehouseLng != null) {
+      showPasscodeScreen(drivers, { lat: Number(checkinSettings.warehouseLat), lng: Number(checkinSettings.warehouseLng) });
+      return;
+    }
     // The admin page's own postcode setting takes priority (set at
     // /checkin/admin/) — falls back to the main dashboard's yard postcode.
     var postcode = checkinSettings.warehousePostcode || settings.yardPostcode || 'MK1 1AA';

@@ -119,30 +119,57 @@
       var checkinSettings = results[0];
       var mainSettings = results[1];
       var current = checkinSettings.warehousePostcode || mainSettings.yardPostcode || '';
+      var radius = checkinSettings.geofenceRadiusM || 100;
+      var lat = checkinSettings.warehouseLat != null ? checkinSettings.warehouseLat : '';
+      var lng = checkinSettings.warehouseLng != null ? checkinSettings.warehouseLng : '';
       render(
         '<h1>Check-In Settings</h1>' +
-        '<p class="sub">Warehouse postcode used for the driver 100m geofence</p>' +
+        '<p class="sub">Where drivers must be, and how close, to check in/out</p>' +
+        '<label>Geofence radius (metres)</label>' +
+        '<input type="text" inputmode="numeric" id="radius-field" value="' + escapeHtml(String(radius)) + '" placeholder="100" />' +
         '<label>Warehouse postcode</label>' +
         '<input type="text" id="pc-field" value="' + escapeHtml(current) + '" placeholder="e.g. MK1 1AA" />' +
-        '<div class="hint">Drivers must be within 100m of this postcode\'s location to check in/out.</div>' +
+        '<div class="hint">Used to look up the warehouse location — UK postcodes only.</div>' +
+        '<label>Test coordinates override</label>' +
+        '<div style="display:flex; gap:8px; margin-bottom:6px;">' +
+          '<input type="text" inputmode="decimal" id="lat-field" value="' + escapeHtml(String(lat)) + '" placeholder="Latitude" style="margin-bottom:0" />' +
+          '<input type="text" inputmode="decimal" id="lng-field" value="' + escapeHtml(String(lng)) + '" placeholder="Longitude" style="margin-bottom:0" />' +
+        '</div>' +
+        '<div class="hint">If set, this overrides the postcode entirely — use this to test from anywhere (e.g. outside the UK). Clear both fields and save to go back to using the postcode.</div>' +
         '<div class="error" id="save-error"></div>' +
         '<button class="btn-primary" id="save-btn">Save</button>' +
         '<div id="save-success"></div>'
       );
       document.getElementById('save-btn').addEventListener('click', function () {
         var val = document.getElementById('pc-field').value.trim();
+        var radiusVal = document.getElementById('radius-field').value.trim();
+        var latVal = document.getElementById('lat-field').value.trim();
+        var lngVal = document.getElementById('lng-field').value.trim();
         var errEl = document.getElementById('save-error');
         var okEl = document.getElementById('save-success');
         errEl.textContent = '';
         okEl.textContent = '';
-        if (!val) { errEl.textContent = 'Enter a postcode.'; return; }
+        if (!val) { errEl.textContent = 'Enter a postcode (still required as the fallback).'; return; }
+        var radiusNum = Number(radiusVal);
+        if (!radiusVal || !Number.isFinite(radiusNum) || radiusNum <= 0) { errEl.textContent = 'Radius must be a positive number.'; return; }
+        if ((latVal && !lngVal) || (!latVal && lngVal)) { errEl.textContent = 'Set both latitude and longitude, or leave both blank.'; return; }
+        var payload = { warehousePostcode: val, geofenceRadiusM: radiusNum };
+        if (latVal && lngVal) {
+          var latNum = Number(latVal), lngNum = Number(lngVal);
+          if (!Number.isFinite(latNum) || !Number.isFinite(lngNum)) { errEl.textContent = 'Latitude/longitude must be numbers.'; return; }
+          payload.warehouseLat = latNum;
+          payload.warehouseLng = lngNum;
+        } else {
+          payload.warehouseLat = null;
+          payload.warehouseLng = null;
+        }
         var btn = document.getElementById('save-btn');
         btn.disabled = true;
         btn.textContent = 'Saving…';
-        setJson('checkinSettings', { warehousePostcode: val }).then(function () {
+        setJson('checkinSettings', payload).then(function () {
           btn.disabled = false;
           btn.textContent = 'Save';
-          okEl.innerHTML = '<p class="success">Saved — the check-in page will use this postcode.</p>';
+          okEl.innerHTML = '<p class="success">Saved.</p>';
         }).catch(function (e) {
           btn.disabled = false;
           btn.textContent = 'Save';

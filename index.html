@@ -159,11 +159,18 @@ window.addEventListener('unhandledrejection', function (e) {
 
   var appReadyFn = null;
   var authed = false;
+  // Supabase refreshes the session token in the background — including a
+  // check whenever the tab regains visibility — which fires onAuthStateChange
+  // again. Without this guard, appReadyFn() (which mounts a fresh React root)
+  // ran on every one of those events, wiping whatever the user was filling
+  // in just from switching tabs and back. The app should only ever mount once.
+  var appStarted = false;
 
   window.__vefiveOnAppReady = function (fn) { appReadyFn = fn; maybeStart(); };
 
   function maybeStart() {
-    if (authed && appReadyFn) {
+    if (authed && appReadyFn && !appStarted) {
+      appStarted = true;
       document.getElementById('loading').classList.add('hidden');
       document.getElementById('authgate').style.display = 'none';
       document.getElementById('passgate').style.display = 'none';

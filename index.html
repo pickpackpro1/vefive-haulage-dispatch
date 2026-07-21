@@ -12055,8 +12055,8 @@ function PaymentsView({
 }
 
 /* ================================================================== */
-/*  Check-In — GPS driver check-in/out config + activity, mirrors what */
-/*  /checkin/admin/ configures and what the GPS check-in page writes  */
+/*  Check-In — GPS driver config + activity. Configures the same       */
+/*  checkinSettings data the /checkin/ driver page reads.              */
 /* ================================================================== */
 function CheckInAdminView({
   drivers,
@@ -12124,8 +12124,10 @@ function CheckInAdminView({
       setToast('Enter a postcode first');
       return;
     }
+    // The Field component's type="number" already converts this to a
+    // number (or '' when empty) — never a string with a .trim() to call.
     const radiusNum = Number(radiusInput);
-    if (!radiusInput.trim() || !Number.isFinite(radiusNum) || radiusNum <= 0) {
+    if (radiusInput === '' || !Number.isFinite(radiusNum) || radiusNum <= 0) {
       setToast('Radius must be a positive number');
       return;
     }

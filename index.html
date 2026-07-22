@@ -4365,6 +4365,10 @@ function HaulageDispatchDashboard() {
   };
   const deleteJob = id => {
     setJobs(jobs.filter(j => j.id !== id));
+    // A payment record linked to this job has no reason to exist once the
+    // job's gone — without this it'd resurface as an orphaned row instead
+    // of the job's Payments-tab row actually disappearing.
+    setPaymentTerms(paymentTerms.filter(p => p.sourceJobId !== id));
     if (editingId === id) {
       setEditingId(null);
       setJob(blankJob());
@@ -4705,6 +4709,7 @@ function HaulageDispatchDashboard() {
     markPaymentPaid: markPaymentPaid,
     updatePaymentTerm: updatePaymentTerm,
     deletePaymentTerm: deletePaymentTerm,
+    deleteJob: deleteJob,
     setToast: setToast
   }), tab === 'checkin' && /*#__PURE__*/React.createElement(CheckInAdminView, {
     drivers: drivers,
@@ -11858,10 +11863,15 @@ function PaymentsView({
   markPaymentPaid,
   updatePaymentTerm,
   deletePaymentTerm,
+  deleteJob,
   setToast
 }) {
   const [showPaid, setShowPaid] = useState(false);
   const [adding, setAdding] = useState(false);
+  // Row pending a delete decision — a job-linked row needs the user to pick
+  // between clearing just the payment info or removing the job entirely
+  // (native confirm() only offers one Yes/No, not a real choice).
+  const [confirmingDelete, setConfirmingDelete] = useState(null);
   // Every non-cancelled job gets a row here, not just ones that already have
   // a saved payment record — jobs without one get a "virtual" row built
   // straight from the job, so a due date can be set on the spot. Editing a
@@ -11942,22 +11952,68 @@ function PaymentsView({
     }
     setToast(p.paid ? 'Marked unpaid' : 'Marked paid');
   };
-  // A job-linked record can't truly disappear — the row is driven by the job,
-  // not the record — so deleting it just clears terms/due date back to blank.
-  // Warn with wording that matches what actually happens, instead of the
-  // generic "deleted" message that made it look broken.
+  // A job-linked record can't truly disappear on its own — the row is driven
+  // by the job, not the record. Give the user the actual choice: clear just
+  // the payment info (row stays, blank) or delete the job outright (row and
+  // everything else about that job goes too, including History).
   const deletePaymentTermRow = p => {
     const linkedToJob = p.sourceJobId && (jobs || []).some(j => j.id === p.sourceJobId);
-    const message = linkedToJob ? 'This clears the payment terms and due date for this job — the row stays (it comes from the job itself), just blank. Continue?' : 'Delete this payment record? This cannot be undone.';
-    if (!confirm(message)) return;
+    if (linkedToJob) {
+      setConfirmingDelete(p);
+      return;
+    }
+    if (!confirm('Delete this payment record? This cannot be undone.')) return;
     deletePaymentTerm(p.id);
+  };
+  const clearTermsOnly = () => {
+    deletePaymentTerm(confirmingDelete.id);
+    setConfirmingDelete(null);
+    setToast('Payment terms cleared');
+  };
+  const deleteJobAndRow = () => {
+    deleteJob(confirmingDelete.sourceJobId);
+    setConfirmingDelete(null);
+    setToast('Job deleted');
   };
   const unpaid = (paymentTerms || []).filter(p => !p.paid);
   const outstandingTotal = unpaid.reduce((s, p) => s + parseMoneyValue(p.agreedRate), 0);
   const overdueCount = unpaid.filter(p => paymentStatus(p).key === 'overdue' || paymentStatus(p).key === 'today').length;
   const dueSoonCount = unpaid.filter(p => paymentStatus(p).key === 'soon').length;
   const chartData = useMemo(() => paymentsChartData(unpaid), [unpaid]);
-  return /*#__PURE__*/React.createElement("div", {
+  const deleteModal = confirmingDelete && /*#__PURE__*/React.createElement("div", {
+    className: "fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4",
+    onClick: () => setConfirmingDelete(null)
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "bg-white rounded-lg shadow-xl max-w-sm w-full p-5",
+    onClick: e => e.stopPropagation()
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2 mb-2 text-stone-900 font-medium"
+  }, /*#__PURE__*/React.createElement(AlertCircle, {
+    size: 16,
+    className: "text-amber-600 flex-shrink-0"
+  }), `Delete "${confirmingDelete.reference || confirmingDelete.loadId || 'this job'}"?`), /*#__PURE__*/React.createElement("p", {
+    className: "text-sm text-stone-600 mb-4"
+  }, "This job is still on your Jobs list, so the row can't just disappear on its own. Pick what you actually want:"), /*#__PURE__*/React.createElement("div", {
+    className: "space-y-2"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: clearTermsOnly,
+    className: "w-full text-left text-sm px-3 py-2 rounded border border-stone-300 hover:bg-stone-50"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "font-medium block"
+  }, "Clear payment terms"), /*#__PURE__*/React.createElement("span", {
+    className: "block text-xs text-stone-500"
+  }, "Row stays — terms and due date reset to blank")), /*#__PURE__*/React.createElement("button", {
+    onClick: deleteJobAndRow,
+    className: "w-full text-left text-sm px-3 py-2 rounded border border-red-300 text-red-700 hover:bg-red-50"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "font-medium block"
+  }, "Delete the job entirely"), /*#__PURE__*/React.createElement("span", {
+    className: "block text-xs text-red-500"
+  }, "Removes it from Jobs, History and this list — can't be undone"))), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setConfirmingDelete(null),
+    className: "mt-3 w-full text-center text-xs text-stone-500 hover:text-stone-700"
+  }, "Cancel")));
+  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     className: "space-y-6"
   }, /*#__PURE__*/React.createElement("div", {
     className: "grid sm:grid-cols-3 gap-4"
@@ -12144,7 +12200,7 @@ function PaymentsView({
     title: "Delete"
   }, /*#__PURE__*/React.createElement(Trash2, {
     size: 14
-  }))))))))));
+  })))))))))), deleteModal);
 }
 
 /* ================================================================== */

@@ -4276,6 +4276,14 @@ function HaulageDispatchDashboard() {
       setToast('Add a start time before saving');
       return;
     }
+    // Reference numbers (HX-xxxxx) should be unique per job — flag it rather
+    // than silently saving a second job under the same number.
+    if (!isEditingDraft && src.reference) {
+      const dupJob = jobs.find(j => j.reference && j.reference.trim().toUpperCase() === src.reference.trim().toUpperCase());
+      if (dupJob && !confirm(`A job with reference "${src.reference}" already exists (${dupJob.customer || 'no customer set'}${dupJob.date ? ', ' + dupJob.date : ''}). Save this as a duplicate anyway?`)) {
+        return;
+      }
+    }
     const {
       jobToSave,
       newCustomer
@@ -4659,6 +4667,7 @@ function HaulageDispatchDashboard() {
   }), tab === 'loads' && /*#__PURE__*/React.createElement(PdfImportView, {
     settings: settings,
     jobs: jobs,
+    paymentTerms: paymentTerms,
     customers: customers,
     drivers: drivers,
     saveJob: saveJob,
@@ -11367,6 +11376,7 @@ function buildJobFromPdfFields(f, settings) {
 function PdfImportView({
   settings,
   jobs,
+  paymentTerms,
   customers,
   drivers,
   saveJob,
@@ -11475,6 +11485,12 @@ function PdfImportView({
     // updates that job's row in the Payments tab instead of creating a
     // separate, unlinked duplicate for the same load.
     const matchingJob = (jobs || []).find(j => j.reference && fields.jobNumber && j.reference.trim().toUpperCase() === fields.jobNumber.trim().toUpperCase());
+    // Same reference number already has a payment record — flag it instead
+    // of silently overwriting whatever was saved for it before.
+    const dupPayment = fields.jobNumber && (paymentTerms || []).find(p => (p.loadId || p.reference || '').trim().toUpperCase() === fields.jobNumber.trim().toUpperCase());
+    if (dupPayment && !confirm(`A payment record for "${fields.jobNumber}" already exists (${dupPayment.customerName || 'no customer set'}, terms: ${dupPayment.paymentTermsRaw || 'none set'}). Overwrite it with these details?`)) {
+      return;
+    }
     addPaymentTerm({
       sourceJobId: matchingJob ? matchingJob.id : '',
       loadId: fields.jobNumber,
@@ -11536,6 +11552,12 @@ function PdfImportView({
   }, "Payment terms"), /*#__PURE__*/React.createElement("div", {
     className: "space-y-2 text-sm mb-4"
   }, /*#__PURE__*/React.createElement("div", {
+    className: "flex justify-between"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-stone-500"
+  }, "Job number"), /*#__PURE__*/React.createElement("span", {
+    className: "font-medium"
+  }, fields.jobNumber || '—')), /*#__PURE__*/React.createElement("div", {
     className: "flex justify-between"
   }, /*#__PURE__*/React.createElement("span", {
     className: "text-stone-500"
@@ -11963,6 +11985,11 @@ function PaymentsView({
   }))))), adding && /*#__PURE__*/React.createElement(PaymentTermForm, {
     initial: {},
     onSave: rec => {
+      const ref = (rec.loadId || rec.reference || '').trim().toUpperCase();
+      const dup = ref && (paymentTerms || []).find(p => (p.loadId || p.reference || '').trim().toUpperCase() === ref);
+      if (dup && !confirm(`A payment record for "${rec.loadId || rec.reference}" already exists (${dup.customerName || 'no customer set'}, terms: ${dup.paymentTermsRaw || 'none set'}). Overwrite it with these details?`)) {
+        return;
+      }
       addPaymentTerm(rec);
       setAdding(false);
     },

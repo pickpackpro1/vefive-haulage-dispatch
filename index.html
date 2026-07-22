@@ -2816,6 +2816,19 @@ function parsePaymentTermsDays(text) {
 function isEndOfMonthTerms(text) {
   return /end\s*of\s*month/i.test(text || '');
 }
+// PDF-extracted terms text rarely matches PAYMENT_TERMS_OPTIONS byte-for-byte
+// (spacing/case), which leaves the Payments tab dropdown showing "— Select —"
+// even though a value was saved. Map the free text onto the closest option so
+// the dropdown reflects what was actually saved.
+function normalizePaymentTermsOption(raw) {
+  const text = (raw || '').trim();
+  if (!text) return '';
+  if (/^cod$/i.test(text) || /cash\s*on\s*delivery/i.test(text)) return 'COD';
+  const days = parsePaymentTermsDays(text);
+  if (!days) return '';
+  const candidate = `${days} Days (${isEndOfMonthTerms(text) ? 'End Of Month' : 'From Invoice'})`;
+  return PAYMENT_TERMS_OPTIONS.includes(candidate) ? candidate : '';
+}
 // referenceDateIso is the date payment terms count from — normally the
 // delivery date. Returns a YYYY-MM-DD due date, or '' if there's nothing
 // to compute from.
@@ -4475,6 +4488,17 @@ function HaulageDispatchDashboard() {
     setToast('Expense duplicated');
   };
   const addPaymentTerm = pt => {
+    // Same job or same load reference already has a record — update it in
+    // place instead of creating a duplicate row for the same job.
+    const existing = pt.sourceJobId ? paymentTerms.find(p => p.sourceJobId === pt.sourceJobId) : pt.loadId ? paymentTerms.find(p => !p.sourceJobId && p.loadId === pt.loadId) : null;
+    if (existing) {
+      setPaymentTerms(paymentTerms.map(p => p.id === existing.id ? {
+        ...p,
+        ...pt
+      } : p));
+      setToast('Payment terms updated');
+      return;
+    }
     setPaymentTerms([...paymentTerms, {
       ...blankPaymentTerm(),
       ...pt,
@@ -11447,12 +11471,17 @@ function PdfImportView({
   const hasPaymentInfo = !!(fields && (fields.paymentTermsRaw || fields.agreedRateRaw));
   const savePayment = () => {
     if (!fields) return;
+    // Link to the matching job (by reference) if one already exists, so this
+    // updates that job's row in the Payments tab instead of creating a
+    // separate, unlinked duplicate for the same load.
+    const matchingJob = (jobs || []).find(j => j.reference && fields.jobNumber && j.reference.trim().toUpperCase() === fields.jobNumber.trim().toUpperCase());
     addPaymentTerm({
+      sourceJobId: matchingJob ? matchingJob.id : '',
       loadId: fields.jobNumber,
       reference: fields.jobNumber,
       customerName: fields.customerName,
       agreedRate: fields.agreedRateRaw,
-      paymentTermsRaw: fields.paymentTermsRaw,
+      paymentTermsRaw: normalizePaymentTermsOption(fields.paymentTermsRaw) || fields.paymentTermsRaw,
       deliveryDate: paymentDeliveryIso,
       dueDate: paymentDueIso,
       sourceFile: fileName

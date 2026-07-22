@@ -4086,6 +4086,11 @@ function HaulageDispatchDashboard() {
   const [driverDayLogs, setDriverDayLogs] = useState([]);
   const [expenses, setExpenses] = useState([]);
   const [paymentTerms, setPaymentTerms] = useState([]);
+  // Job ids whose Payments-tab row was explicitly cleared rather than just
+  // edited — kept out of `rows` until a new payment record is saved for that
+  // job again (see addPaymentTerm), so a cleared row doesn't just reappear
+  // blank the next render.
+  const [dismissedPaymentJobs, setDismissedPaymentJobs] = useState([]);
   const [checkinSettings, setCheckinSettings] = useState({ warehousePostcode: '' });
   const [job, setJob] = useState(blankJob());
   const [editingId, setEditingId] = useState(null);
@@ -4128,6 +4133,10 @@ function HaulageDispatchDashboard() {
         if (pt?.value) setPaymentTerms(JSON.parse(pt.value));
       } catch (_) {}
       try {
+        const dpj = await window.storage.get('dismissedPaymentJobs');
+        if (dpj?.value) setDismissedPaymentJobs(JSON.parse(dpj.value));
+      } catch (_) {}
+      try {
         const cs = await window.storage.get('checkinSettings');
         if (cs?.value) setCheckinSettings(prev => ({ ...prev, ...JSON.parse(cs.value) }));
       } catch (_) {}
@@ -4158,6 +4167,9 @@ function HaulageDispatchDashboard() {
   useEffect(() => {
     if (loaded) window.storage.set('paymentTerms', JSON.stringify(paymentTerms)).catch(() => {});
   }, [paymentTerms, loaded]);
+  useEffect(() => {
+    if (loaded) window.storage.set('dismissedPaymentJobs', JSON.stringify(dismissedPaymentJobs)).catch(() => {});
+  }, [dismissedPaymentJobs, loaded]);
   useEffect(() => {
     if (loaded) window.storage.set('checkinSettings', JSON.stringify(checkinSettings)).catch(() => {});
   }, [checkinSettings, loaded]);
@@ -4522,6 +4534,11 @@ function HaulageDispatchDashboard() {
     setToast('Expense duplicated');
   };
   const addPaymentTerm = pt => {
+    // Saving terms for a job that was previously cleared un-clears it — the
+    // whole point of clearing was "hide until I add terms again".
+    if (pt.sourceJobId && dismissedPaymentJobs.includes(pt.sourceJobId)) {
+      setDismissedPaymentJobs(dismissedPaymentJobs.filter(id => id !== pt.sourceJobId));
+    }
     // Same job or same load reference already has a record — update it in
     // place instead of creating a duplicate row for the same job.
     const existing = pt.sourceJobId ? paymentTerms.find(p => p.sourceJobId === pt.sourceJobId) : pt.loadId ? paymentTerms.find(p => !p.sourceJobId && p.loadId === pt.loadId) : null;
@@ -4549,12 +4566,19 @@ function HaulageDispatchDashboard() {
     paid,
     paidAt: paid ? new Date().toISOString() : ''
   });
-  // No confirm() here — the caller (Payments tab row) already confirms with
-  // wording that matches what'll actually happen (see deletePaymentTermRow):
-  // a job-linked record reverts to a blank row rather than disappearing,
-  // since the row is really the job, not the payment record.
+  // No confirm() here — call sites (Payments tab row buttons) confirm with
+  // wording that matches what they're actually doing.
   const deletePaymentTerm = id => {
     setPaymentTerms(paymentTerms.filter(p => p.id !== id));
+  };
+  // "Clear payment terms" for a job-linked row: removes the record (if any —
+  // a virtual row has none yet) and marks the job dismissed so the row stays
+  // gone instead of the job just re-generating a blank one next render. The
+  // job itself is untouched — it still exists in Jobs/History, just not
+  // tracked here until payment terms are added for it again.
+  const clearPaymentTermForJob = (jobId, recordId) => {
+    if (recordId) setPaymentTerms(paymentTerms.filter(p => p.id !== recordId));
+    setDismissedPaymentJobs(ids => ids.includes(jobId) ? ids : [...ids, jobId]);
   };
   const importBackup = data => {
     if (data.settings) setSettings({
@@ -4705,10 +4729,12 @@ function HaulageDispatchDashboard() {
   }), tab === 'payments' && /*#__PURE__*/React.createElement(PaymentsView, {
     jobs: jobs,
     paymentTerms: paymentTerms,
+    dismissedPaymentJobs: dismissedPaymentJobs,
     addPaymentTerm: addPaymentTerm,
     markPaymentPaid: markPaymentPaid,
     updatePaymentTerm: updatePaymentTerm,
     deletePaymentTerm: deletePaymentTerm,
+    clearPaymentTermForJob: clearPaymentTermForJob,
     deleteJob: deleteJob,
     setToast: setToast
   }), tab === 'checkin' && /*#__PURE__*/React.createElement(CheckInAdminView, {
@@ -11859,27 +11885,28 @@ function exportPaymentsXlsx(paymentTerms) {
 function PaymentsView({
   jobs,
   paymentTerms,
+  dismissedPaymentJobs,
   addPaymentTerm,
   markPaymentPaid,
   updatePaymentTerm,
   deletePaymentTerm,
+  clearPaymentTermForJob,
   deleteJob,
   setToast
 }) {
   const [showPaid, setShowPaid] = useState(false);
   const [adding, setAdding] = useState(false);
-  // Row pending a delete decision — a job-linked row needs the user to pick
-  // between clearing just the payment info or removing the job entirely
-  // (native confirm() only offers one Yes/No, not a real choice).
-  const [confirmingDelete, setConfirmingDelete] = useState(null);
-  // Every non-cancelled job gets a row here, not just ones that already have
-  // a saved payment record — jobs without one get a "virtual" row built
-  // straight from the job, so a due date can be set on the spot. Editing a
-  // virtual row's terms/due date/paid state creates the real record via
-  // addPaymentTerm (matched back to this job by sourceJobId, same as the
-  // Calculator's auto-sync on save).
+  // Every non-cancelled, non-dismissed job gets a row here, not just ones
+  // that already have a saved payment record — jobs without one get a
+  // "virtual" row built straight from the job, so a due date can be set on
+  // the spot. Editing a virtual row's terms/due date/paid state creates the
+  // real record via addPaymentTerm (matched back to this job by sourceJobId,
+  // same as the Calculator's auto-sync on save). A job the user explicitly
+  // cleared (dismissedPaymentJobs) is skipped entirely until terms are added
+  // for it again — otherwise it'd just regenerate the same blank row.
   const rows = useMemo(() => {
     const usedJobIds = new Set();
+    const dismissedSet = new Set(dismissedPaymentJobs || []);
     const fromJobs = (jobs || []).map(j => {
       const existing = (paymentTerms || []).find(p => p.sourceJobId === j.id);
       if (existing) {
@@ -11889,6 +11916,7 @@ function PaymentsView({
           status: paymentStatus(existing)
         };
       }
+      if (dismissedSet.has(j.id)) return null;
       const virtual = {
         id: `virtual-${j.id}`,
         isVirtual: true,
@@ -11906,7 +11934,7 @@ function PaymentsView({
         p: virtual,
         status: paymentStatus(virtual)
       };
-    });
+    }).filter(Boolean);
     const orphanRecords = (paymentTerms || []).filter(p => !p.sourceJobId || !usedJobIds.has(p.sourceJobId)).map(p => ({
       p,
       status: paymentStatus(p)
@@ -11917,7 +11945,7 @@ function PaymentsView({
       if (a.p.paid !== b.p.paid) return a.p.paid ? 1 : -1;
       return (a.p.dueDate || '9999-99-99').localeCompare(b.p.dueDate || '9999-99-99');
     });
-  }, [jobs, paymentTerms, showPaid]);
+  }, [jobs, paymentTerms, dismissedPaymentJobs, showPaid]);
   // Persists a virtual (job-only) row for the first time on edit; updates the
   // real record otherwise.
   const ensureAndUpdate = (p, patch) => {
@@ -11952,68 +11980,32 @@ function PaymentsView({
     }
     setToast(p.paid ? 'Marked unpaid' : 'Marked paid');
   };
-  // A job-linked record can't truly disappear on its own — the row is driven
-  // by the job, not the record. Give the user the actual choice: clear just
-  // the payment info (row stays, blank) or delete the job outright (row and
-  // everything else about that job goes too, including History).
-  const deletePaymentTermRow = p => {
-    const linkedToJob = p.sourceJobId && (jobs || []).some(j => j.id === p.sourceJobId);
-    if (linkedToJob) {
-      setConfirmingDelete(p);
-      return;
-    }
-    if (!confirm('Delete this payment record? This cannot be undone.')) return;
-    deletePaymentTerm(p.id);
-  };
-  const clearTermsOnly = () => {
-    deletePaymentTerm(confirmingDelete.id);
-    setConfirmingDelete(null);
+  // A job-linked row gets two distinct delete actions, since "delete" is
+  // ambiguous when the row is really the job: clearing just hides the
+  // payment record (job untouched, everywhere else), deleting removes the
+  // job itself — from Jobs, History, and this row — for good.
+  const clearThisPaymentTerm = p => {
+    if (!confirm(`Clear payment terms for "${p.reference || p.loadId || 'this job'}"? The job stays everywhere else, but this row disappears from Payments until you add terms again.`)) return;
+    clearPaymentTermForJob(p.sourceJobId, p.isVirtual ? null : p.id);
     setToast('Payment terms cleared');
   };
-  const deleteJobAndRow = () => {
-    deleteJob(confirmingDelete.sourceJobId);
-    setConfirmingDelete(null);
+  const deleteThisJob = p => {
+    if (!confirm(`Delete "${p.reference || p.loadId || 'this job'}" completely? This removes it from Jobs, History, and this Payments row — everywhere in the app. This cannot be undone.`)) return;
+    deleteJob(p.sourceJobId);
     setToast('Job deleted');
+  };
+  // Orphan records aren't tied to any current job — nothing to preserve, so
+  // a plain delete is the only option.
+  const deleteOrphanRecord = p => {
+    if (!confirm('Delete this payment record? This cannot be undone.')) return;
+    deletePaymentTerm(p.id);
   };
   const unpaid = (paymentTerms || []).filter(p => !p.paid);
   const outstandingTotal = unpaid.reduce((s, p) => s + parseMoneyValue(p.agreedRate), 0);
   const overdueCount = unpaid.filter(p => paymentStatus(p).key === 'overdue' || paymentStatus(p).key === 'today').length;
   const dueSoonCount = unpaid.filter(p => paymentStatus(p).key === 'soon').length;
   const chartData = useMemo(() => paymentsChartData(unpaid), [unpaid]);
-  const deleteModal = confirmingDelete && /*#__PURE__*/React.createElement("div", {
-    className: "fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4",
-    onClick: () => setConfirmingDelete(null)
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "bg-white rounded-lg shadow-xl max-w-sm w-full p-5",
-    onClick: e => e.stopPropagation()
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "flex items-center gap-2 mb-2 text-stone-900 font-medium"
-  }, /*#__PURE__*/React.createElement(AlertCircle, {
-    size: 16,
-    className: "text-amber-600 flex-shrink-0"
-  }), `Delete "${confirmingDelete.reference || confirmingDelete.loadId || 'this job'}"?`), /*#__PURE__*/React.createElement("p", {
-    className: "text-sm text-stone-600 mb-4"
-  }, "This job is still on your Jobs list, so the row can't just disappear on its own. Pick what you actually want:"), /*#__PURE__*/React.createElement("div", {
-    className: "space-y-2"
-  }, /*#__PURE__*/React.createElement("button", {
-    onClick: clearTermsOnly,
-    className: "w-full text-left text-sm px-3 py-2 rounded border border-stone-300 hover:bg-stone-50"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "font-medium block"
-  }, "Clear payment terms"), /*#__PURE__*/React.createElement("span", {
-    className: "block text-xs text-stone-500"
-  }, "Row stays — terms and due date reset to blank")), /*#__PURE__*/React.createElement("button", {
-    onClick: deleteJobAndRow,
-    className: "w-full text-left text-sm px-3 py-2 rounded border border-red-300 text-red-700 hover:bg-red-50"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "font-medium block"
-  }, "Delete the job entirely"), /*#__PURE__*/React.createElement("span", {
-    className: "block text-xs text-red-500"
-  }, "Removes it from Jobs, History and this list — can't be undone"))), /*#__PURE__*/React.createElement("button", {
-    onClick: () => setConfirmingDelete(null),
-    className: "mt-3 w-full text-center text-xs text-stone-500 hover:text-stone-700"
-  }, "Cancel")));
-  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+  return /*#__PURE__*/React.createElement("div", {
     className: "space-y-6"
   }, /*#__PURE__*/React.createElement("div", {
     className: "grid sm:grid-cols-3 gap-4"
@@ -12194,13 +12186,27 @@ function PaymentsView({
     title: p.paid ? 'Mark unpaid' : 'Mark paid'
   }, /*#__PURE__*/React.createElement(CheckCircle2, {
     size: 14
-  })), !p.isVirtual && /*#__PURE__*/React.createElement("button", {
-    onClick: () => deletePaymentTermRow(p),
+  })), (p.sourceJobId && (jobs || []).some(j => j.id === p.sourceJobId) ? [!p.isVirtual && /*#__PURE__*/React.createElement("button", {
+    key: "clear",
+    onClick: () => clearThisPaymentTerm(p),
+    className: "text-stone-400 hover:text-amber-700 p-1",
+    title: "Clear payment terms (keeps the job, just stops tracking it here until you add terms again)"
+  }, /*#__PURE__*/React.createElement(X, {
+    size: 14
+  })), /*#__PURE__*/React.createElement("button", {
+    key: "deleteJob",
+    onClick: () => deleteThisJob(p),
+    className: "text-stone-400 hover:text-red-700 p-1",
+    title: "Delete job completely (removes it from Jobs, History and here)"
+  }, /*#__PURE__*/React.createElement(Trash2, {
+    size: 14
+  }))] : /*#__PURE__*/React.createElement("button", {
+    onClick: () => deleteOrphanRecord(p),
     className: "text-stone-400 hover:text-red-700 p-1",
     title: "Delete"
   }, /*#__PURE__*/React.createElement(Trash2, {
     size: 14
-  })))))))))), deleteModal);
+  })))))))))))));
 }
 
 /* ================================================================== */

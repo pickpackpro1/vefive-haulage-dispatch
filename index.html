@@ -12186,7 +12186,7 @@ function PaymentsView({
     title: p.paid ? 'Mark unpaid' : 'Mark paid'
   }, /*#__PURE__*/React.createElement(CheckCircle2, {
     size: 14
-  })), (p.sourceJobId && (jobs || []).some(j => j.id === p.sourceJobId) ? [!p.isVirtual && /*#__PURE__*/React.createElement("button", {
+  })), p.sourceJobId && (jobs || []).some(j => j.id === p.sourceJobId) ? [!p.isVirtual && /*#__PURE__*/React.createElement("button", {
     key: "clear",
     onClick: () => clearThisPaymentTerm(p),
     className: "text-stone-400 hover:text-amber-700 p-1",
@@ -12206,7 +12206,7 @@ function PaymentsView({
     title: "Delete"
   }, /*#__PURE__*/React.createElement(Trash2, {
     size: 14
-  })))))))))))));
+  }))))))))));
 }
 
 /* ================================================================== */

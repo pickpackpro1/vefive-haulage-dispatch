@@ -970,6 +970,30 @@ const blankPaymentTerm = () => ({
   notes: '',
   createdAt: ''
 });
+// Collapses payment records that share the same load number (older builds
+// let these pile up — see addPaymentTerm). When several share a number, keep
+// the one still linked to a real job (sourceJobId), otherwise the newest.
+function dedupePaymentTerms(list, jobs) {
+  const jobIds = new Set((jobs || []).map(j => j.id));
+  const bestByKey = new Map();
+  for (const p of list || []) {
+    const key = (p.loadId || p.reference || '').trim().toUpperCase();
+    if (!key) continue;
+    const prev = bestByKey.get(key);
+    if (!prev) {
+      bestByKey.set(key, p);
+      continue;
+    }
+    const prevLinked = !!(prev.sourceJobId && jobIds.has(prev.sourceJobId));
+    const curLinked = !!(p.sourceJobId && jobIds.has(p.sourceJobId));
+    if (curLinked && !prevLinked) bestByKey.set(key, p);else if (curLinked === prevLinked && (p.createdAt || '') > (prev.createdAt || '')) bestByKey.set(key, p);
+  }
+  const keep = new Set([...bestByKey.values()].map(p => p.id));
+  return (list || []).filter(p => {
+    const key = (p.loadId || p.reference || '').trim().toUpperCase();
+    return !key || keep.has(p.id);
+  });
+}
 const blankExpense = () => ({
   id: '',
   date: todayStrLocal(),
@@ -4186,6 +4210,24 @@ function HaulageDispatchDashboard() {
     }));
     setToast(`Migrated ${generated.length} day${generated.length === 1 ? '' : 's'} of driver hours from existing jobs`);
   }, [loaded]); // eslint-disable-line react-hooks/exhaustive-deps
+  // One-time cleanup: older builds could create more than one payment record
+  // for the same load number (e.g. a PDF-import save that didn't link back to
+  // the job). Collapse those down to one record each, run once and flagged so
+  // it never re-runs.
+  useEffect(() => {
+    if (!loaded) return;
+    if (settings.paymentTermsDedupedAt) return;
+    const deduped = dedupePaymentTerms(paymentTerms, jobs);
+    const removed = paymentTerms.length - deduped.length;
+    if (removed > 0) {
+      setPaymentTerms(deduped);
+      setToast(`Removed ${removed} duplicate payment record${removed === 1 ? '' : 's'}`);
+    }
+    setSettings(s => ({
+      ...s,
+      paymentTermsDedupedAt: new Date().toISOString()
+    }));
+  }, [loaded]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!toast) return;
     const t = setTimeout(() => setToast(''), 3000);
@@ -4304,29 +4346,9 @@ function HaulageDispatchDashboard() {
         id: finalId
       }]);
     }
-    // Payment terms set on the Calculator get mirrored onto the Payments tab
-    // automatically — upserted by sourceJobId so re-saving the same job
-    // updates its existing record instead of duplicating it.
-    if (jobToSave.paymentTermsRaw) {
-      const existing = paymentTerms.find(p => p.sourceJobId === finalId);
-      const rec = {
-        reference: jobToSave.reference,
-        loadId: jobToSave.reference,
-        customerName: jobToSave.customer,
-        agreedRate: jobToSave.customerRate,
-        paymentTermsRaw: jobToSave.paymentTermsRaw,
-        deliveryDate: jobToSave.date,
-        dueDate: computePaymentDueDateIso(jobToSave.date, jobToSave.paymentTermsRaw),
-        sourceJobId: finalId
-      };
-      if (existing) {
-        updatePaymentTerm(existing.id, rec);
-      } else {
-        addPaymentTerm(rec);
-      }
-    }
-    // Set after the payment-terms upsert so this is the toast the user sees
-    // (addPaymentTerm sets its own toast internally).
+    // Saving a job deliberately does not touch the Payments tab — payment
+    // terms are set from the Payments tab (or the PDF-import Payment terms
+    // card) using their own explicit save action, not mirrored off the job.
     setToast(isEditingDraft ? 'Job updated' : newCustomer ? `Job saved, customer "${newCustomer.name}" added` : 'Job saved');
     if (!jobOverride) {
       setJob(blankJob());
@@ -4523,8 +4545,11 @@ function HaulageDispatchDashboard() {
     paid,
     paidAt: paid ? new Date().toISOString() : ''
   });
+  // No confirm() here — the caller (Payments tab row) already confirms with
+  // wording that matches what'll actually happen (see deletePaymentTermRow):
+  // a job-linked record reverts to a blank row rather than disappearing,
+  // since the row is really the job, not the payment record.
   const deletePaymentTerm = id => {
-    if (!confirm('Delete this payment record? This cannot be undone.')) return;
     setPaymentTerms(paymentTerms.filter(p => p.id !== id));
   };
   const importBackup = data => {
@@ -5145,7 +5170,7 @@ function Calculator({
     value: job.paymentTermsRaw || '',
     onChange: v => upd('paymentTermsRaw', v),
     options: [['', '— Not set —'], ...PAYMENT_TERMS_OPTIONS.map(t => [t, t])],
-    hint: "Set this and saving the job also adds it to the Payments tab"
+    hint: "For reference only — set the actual due date from the Payments tab"
   }), /*#__PURE__*/React.createElement("div", {
     className: "space-y-2"
   }, /*#__PURE__*/React.createElement("button", {
@@ -11917,6 +11942,16 @@ function PaymentsView({
     }
     setToast(p.paid ? 'Marked unpaid' : 'Marked paid');
   };
+  // A job-linked record can't truly disappear — the row is driven by the job,
+  // not the record — so deleting it just clears terms/due date back to blank.
+  // Warn with wording that matches what actually happens, instead of the
+  // generic "deleted" message that made it look broken.
+  const deletePaymentTermRow = p => {
+    const linkedToJob = p.sourceJobId && (jobs || []).some(j => j.id === p.sourceJobId);
+    const message = linkedToJob ? 'This clears the payment terms and due date for this job — the row stays (it comes from the job itself), just blank. Continue?' : 'Delete this payment record? This cannot be undone.';
+    if (!confirm(message)) return;
+    deletePaymentTerm(p.id);
+  };
   const unpaid = (paymentTerms || []).filter(p => !p.paid);
   const outstandingTotal = unpaid.reduce((s, p) => s + parseMoneyValue(p.agreedRate), 0);
   const overdueCount = unpaid.filter(p => paymentStatus(p).key === 'overdue' || paymentStatus(p).key === 'today').length;
@@ -12104,7 +12139,7 @@ function PaymentsView({
   }, /*#__PURE__*/React.createElement(CheckCircle2, {
     size: 14
   })), !p.isVirtual && /*#__PURE__*/React.createElement("button", {
-    onClick: () => deletePaymentTerm(p.id),
+    onClick: () => deletePaymentTermRow(p),
     className: "text-stone-400 hover:text-red-700 p-1",
     title: "Delete"
   }, /*#__PURE__*/React.createElement(Trash2, {

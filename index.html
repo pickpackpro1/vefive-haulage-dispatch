@@ -4077,6 +4077,15 @@ async function copyToClipboard(text) {
 /* ================================================================== */
 function HaulageDispatchDashboard() {
   const [loaded, setLoaded] = useState(false);
+  // Per-key "safe to autosave" flags. A key only becomes true once its
+  // initial fetch actually succeeded — if a fetch fails (network blip,
+  // timeout, whatever), that key's autosave stays off instead of the app
+  // immediately echoing the empty in-memory default back and overwriting
+  // whatever was really in the database. This is what silently wiped the
+  // jobs table before: every key gets echoed back right after load (harmless
+  // when the load succeeded — it's just re-saving what it read), but a key
+  // whose GET failed was echoed back as [] over real data.
+  const [loadOk, setLoadOk] = useState({});
   const [tab, setTab] = useState('calculator');
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
   const [jobs, setJobs] = useState([]);
@@ -4097,88 +4106,107 @@ function HaulageDispatchDashboard() {
   const [toast, setToast] = useState('');
   useEffect(() => {
     (async () => {
+      const ok = {};
+      const failed = [];
       try {
         const s = await window.storage.get('settings');
         if (s?.value) setSettings({
           ...DEFAULT_SETTINGS,
           ...JSON.parse(s.value)
         });
-      } catch (_) {}
+        ok.settings = true;
+      } catch (_) { failed.push('settings'); }
       try {
         const j = await window.storage.get('jobs');
         if (j?.value) setJobs(JSON.parse(j.value).map(migrateJob));
-      } catch (_) {}
+        ok.jobs = true;
+      } catch (_) { failed.push('jobs'); }
       try {
         const c = await window.storage.get('customers');
         if (c?.value) setCustomers(JSON.parse(c.value));
-      } catch (_) {}
+        ok.customers = true;
+      } catch (_) { failed.push('customers'); }
       try {
         const f = await window.storage.get('fuelLogs');
         if (f?.value) setFuelLogs(JSON.parse(f.value));
-      } catch (_) {}
+        ok.fuelLogs = true;
+      } catch (_) { failed.push('fuelLogs'); }
       try {
         const d = await window.storage.get('drivers');
         if (d?.value) setDrivers(JSON.parse(d.value));
-      } catch (_) {}
+        ok.drivers = true;
+      } catch (_) { failed.push('drivers'); }
       try {
         const dl = await window.storage.get('driverDayLogs');
         if (dl?.value) setDriverDayLogs(JSON.parse(dl.value));
-      } catch (_) {}
+        ok.driverDayLogs = true;
+      } catch (_) { failed.push('driverDayLogs'); }
       try {
         const ex = await window.storage.get('expenses');
         if (ex?.value) setExpenses(JSON.parse(ex.value));
-      } catch (_) {}
+        ok.expenses = true;
+      } catch (_) { failed.push('expenses'); }
       try {
         const pt = await window.storage.get('paymentTerms');
         if (pt?.value) setPaymentTerms(JSON.parse(pt.value));
-      } catch (_) {}
+        ok.paymentTerms = true;
+      } catch (_) { failed.push('paymentTerms'); }
       try {
         const dpj = await window.storage.get('dismissedPaymentJobs');
         if (dpj?.value) setDismissedPaymentJobs(JSON.parse(dpj.value));
-      } catch (_) {}
+        ok.dismissedPaymentJobs = true;
+      } catch (_) { failed.push('dismissedPaymentJobs'); }
       try {
         const cs = await window.storage.get('checkinSettings');
         if (cs?.value) setCheckinSettings(prev => ({ ...prev, ...JSON.parse(cs.value) }));
-      } catch (_) {}
+        ok.checkinSettings = true;
+      } catch (_) { failed.push('checkinSettings'); }
+      setLoadOk(ok);
       setLoaded(true);
+      if (failed.length) {
+        setToast(`Couldn't load ${failed.join(', ')} from the server — reload the page before making changes, or your edits may not save`);
+      }
     })();
   }, []);
   useEffect(() => {
-    if (loaded) window.storage.set('settings', JSON.stringify(settings)).catch(() => {});
-  }, [settings, loaded]);
+    if (loadOk.settings) window.storage.set('settings', JSON.stringify(settings)).catch(() => {});
+  }, [settings, loadOk.settings]);
   useEffect(() => {
-    if (loaded) window.storage.set('jobs', JSON.stringify(jobs)).catch(() => {});
-  }, [jobs, loaded]);
+    if (loadOk.jobs) window.storage.set('jobs', JSON.stringify(jobs)).catch(() => {});
+  }, [jobs, loadOk.jobs]);
   useEffect(() => {
-    if (loaded) window.storage.set('customers', JSON.stringify(customers)).catch(() => {});
-  }, [customers, loaded]);
+    if (loadOk.customers) window.storage.set('customers', JSON.stringify(customers)).catch(() => {});
+  }, [customers, loadOk.customers]);
   useEffect(() => {
-    if (loaded) window.storage.set('fuelLogs', JSON.stringify(fuelLogs)).catch(() => {});
-  }, [fuelLogs, loaded]);
+    if (loadOk.fuelLogs) window.storage.set('fuelLogs', JSON.stringify(fuelLogs)).catch(() => {});
+  }, [fuelLogs, loadOk.fuelLogs]);
   useEffect(() => {
-    if (loaded) window.storage.set('drivers', JSON.stringify(drivers)).catch(() => {});
-  }, [drivers, loaded]);
+    if (loadOk.drivers) window.storage.set('drivers', JSON.stringify(drivers)).catch(() => {});
+  }, [drivers, loadOk.drivers]);
   useEffect(() => {
-    if (loaded) window.storage.set('driverDayLogs', JSON.stringify(driverDayLogs)).catch(() => {});
-  }, [driverDayLogs, loaded]);
+    if (loadOk.driverDayLogs) window.storage.set('driverDayLogs', JSON.stringify(driverDayLogs)).catch(() => {});
+  }, [driverDayLogs, loadOk.driverDayLogs]);
   useEffect(() => {
-    if (loaded) window.storage.set('expenses', JSON.stringify(expenses)).catch(() => {});
-  }, [expenses, loaded]);
+    if (loadOk.expenses) window.storage.set('expenses', JSON.stringify(expenses)).catch(() => {});
+  }, [expenses, loadOk.expenses]);
   useEffect(() => {
-    if (loaded) window.storage.set('paymentTerms', JSON.stringify(paymentTerms)).catch(() => {});
-  }, [paymentTerms, loaded]);
+    if (loadOk.paymentTerms) window.storage.set('paymentTerms', JSON.stringify(paymentTerms)).catch(() => {});
+  }, [paymentTerms, loadOk.paymentTerms]);
   useEffect(() => {
-    if (loaded) window.storage.set('dismissedPaymentJobs', JSON.stringify(dismissedPaymentJobs)).catch(() => {});
-  }, [dismissedPaymentJobs, loaded]);
+    if (loadOk.dismissedPaymentJobs) window.storage.set('dismissedPaymentJobs', JSON.stringify(dismissedPaymentJobs)).catch(() => {});
+  }, [dismissedPaymentJobs, loadOk.dismissedPaymentJobs]);
   useEffect(() => {
-    if (loaded) window.storage.set('checkinSettings', JSON.stringify(checkinSettings)).catch(() => {});
-  }, [checkinSettings, loaded]);
+    if (loadOk.checkinSettings) window.storage.set('checkinSettings', JSON.stringify(checkinSettings)).catch(() => {});
+  }, [checkinSettings, loadOk.checkinSettings]);
 
   // One-time migration: if existing jobs carry driverHours and no day logs have
   // been seeded yet, populate the log from those job hours. Tracked via a
   // settings flag so the migration never runs twice (even if logs are deleted).
   useEffect(() => {
     if (!loaded) return;
+    // Only run once jobs and driverDayLogs actually loaded — otherwise this
+    // could seed from an empty jobs list and permanently mark itself done.
+    if (!loadOk.jobs || !loadOk.driverDayLogs) return;
     if (settings.driverHoursMigratedAt) return;
     if (driverDayLogs.length > 0) {
       // Logs already exist — mark as migrated without seeding.
@@ -4228,6 +4256,9 @@ function HaulageDispatchDashboard() {
   // it never re-runs.
   useEffect(() => {
     if (!loaded) return;
+    // Only run once paymentTerms and jobs actually loaded — otherwise this
+    // could wrongly treat every payment record as a duplicate to drop.
+    if (!loadOk.paymentTerms || !loadOk.jobs) return;
     if (settings.paymentTermsDedupedAt) return;
     const deduped = dedupePaymentTerms(paymentTerms, jobs);
     const removed = paymentTerms.length - deduped.length;
